@@ -2,8 +2,6 @@ import { Globe, CreditCard, Zap } from 'lucide-react';
 
 export const config = {
   privyAppId: import.meta.env.VITE_PRIVY_APP_ID || '',
-  masterWalletAddress: import.meta.env.VITE_MASTER_WALLET_ADDRESS || null,
-  solanaMasterWalletAddress: import.meta.env.VITE_SOLANA_MASTER_WALLET_ADDRESS || null,
   defaultAmount: 20,
   defaultToken: 'USDC',
   defaultNetwork: 'Solana',

@@ -5,7 +5,6 @@ import { config } from '../config';
 
 export function CentePayment({
   appId = config.privyAppId,
-  masterWallet = null, // Defaults to null: Dynamically fetches authenticated user's wallet
   defaultAmount = config.defaultAmount,
   defaultToken = config.defaultToken,
   userEmail = '',
@@ -33,7 +32,6 @@ export function CentePayment({
     >
       <CenteFiatOnramp
         appId={appId}
-        masterWallet={masterWallet}
         defaultAmount={defaultAmount}
         defaultToken={defaultToken}
         initialEmail={userEmail}

@@ -44,7 +44,6 @@ export function getSolanaWalletAddress(user) {
 export function CenteFiatOnramp({
   defaultAmount,
   defaultToken = 'USDC',
-  masterWallet,
   appId,
   initialEmail,
   redirectUrl = 'https://app.gocente.com',
@@ -67,11 +66,9 @@ export function CenteFiatOnramp({
   const [email, setEmail] = useState(initialEmail || '');
   const [otpCode, setOtpCode] = useState('');
 
-  // Dynamically resolve destination wallet:
-  // 1. If explicit masterWallet prop or env passed, use it
-  // 2. Otherwise dynamically fetch the authenticated user's wallet
+  // Dynamically fetch the authenticated user's Solana wallet
   const activeUserWallet = getSolanaWalletAddress(user);
-  const destinationAddress = masterWallet || config.solanaMasterWalletAddress || activeUserWallet;
+  const destinationAddress = activeUserWallet;
 
   const handleAmountChange = (e) => {
     let val = e.target.value;
@@ -239,7 +236,7 @@ export function CenteFiatOnramp({
 
     // If already authenticated, fetch the user's active wallet and proceed immediately
     if (authenticated) {
-      const targetWallet = activeUserWallet || destinationAddress;
+      const targetWallet = activeUserWallet;
       if (!targetWallet) {
         setError('Fetching your Solana wallet... please try again in a moment.');
         setIsLoading(false);
@@ -292,7 +289,7 @@ export function CenteFiatOnramp({
 
       // Fetch the logged-in user's wallet address from the response or state
       const loggedInUser = loginRes?.user || user;
-      const targetWallet = getSolanaWalletAddress(loggedInUser) || destinationAddress;
+      const targetWallet = getSolanaWalletAddress(loggedInUser) || activeUserWallet;
 
       await executeFunding(amountNum, defaultCurrency, selectedMethod, selectedToken, targetWallet);
     } catch (err) {
