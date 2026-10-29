@@ -1,45 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { usePrivy, useFundWallet, useAddFunds, useLoginWithEmail } from '@privy-io/react-auth';
-import { ArrowLeft, ArrowRight, Check, CircleAlert, CircleCheck, Mail, Wallet, LogOut } from 'lucide-react';
+import { usePrivy, useFundWallet, useAddFunds, useLoginWithEmail, useWallets } from '@privy-io/react-auth';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  CircleAlert,
+  CircleCheck,
+  Mail,
+  Wallet,
+  LogOut,
+  RefreshCw,
+  Sparkles,
+  Copy,
+} from 'lucide-react';
 import { config, theme, paymentMethods } from '../config';
+import { getSolanaWalletAddress, getEvmWalletAddress } from '../lib/wallet-utils';
+import { triggerAutoBridgeNow } from './wallet/AutoBridgeRunner';
 
-/**
- * Extracts the user's Solana wallet address from the Privy user object
- */
-export function getSolanaWalletAddress(user) {
-  if (!user) return null;
-
-  // 1. Check linkedAccounts for an active Solana wallet
-  if (Array.isArray(user.linkedAccounts)) {
-    const solAccount = user.linkedAccounts.find(
-      (a) =>
-        a.type === 'wallet' &&
-        (a.chainType === 'solana' || (typeof a.address === 'string' && !a.address.startsWith('0x')))
-    );
-    if (solAccount?.address) return solAccount.address;
-  }
-
-  // 2. Check user.wallet if it is a Solana wallet
-  if (
-    user.wallet?.address &&
-    (user.wallet.chainType === 'solana' || !user.wallet.address.startsWith('0x'))
-  ) {
-    return user.wallet.address;
-  }
-
-  // 3. Fall back to any linked wallet
-  if (Array.isArray(user.linkedAccounts)) {
-    const anyWallet = user.linkedAccounts.find((a) => a.type === 'wallet' && a.address);
-    if (anyWallet?.address) return anyWallet.address;
-  }
-
-  // 4. Default user.wallet
-  if (user.wallet?.address) {
-    return user.wallet.address;
-  }
-
-  return null;
-}
+export { getSolanaWalletAddress };
 
 export function CenteFiatOnramp({
   defaultAmount,
@@ -50,6 +28,7 @@ export function CenteFiatOnramp({
   network = 'Solana',
 }) {
   const { user, authenticated, logout } = usePrivy();
+  const { wallets: privyWallets } = useWallets();
   const { addFunds } = useAddFunds();
   const { fundWallet } = useFundWallet();
   const { sendCode, loginWithCode } = useLoginWithEmail();
@@ -65,10 +44,19 @@ export function CenteFiatOnramp({
   const [view, setView] = useState('form'); // 'form' | 'enter-email' | 'enter-code'
   const [email, setEmail] = useState(initialEmail || '');
   const [otpCode, setOtpCode] = useState('');
+  const [isCheckingBridge, setIsCheckingBridge] = useState(false);
+  const [copiedEvm, setCopiedEvm] = useState(false);
 
-  // Dynamically fetch the authenticated user's Solana wallet
-  const activeUserWallet = getSolanaWalletAddress(user);
+  // Dynamically fetch the authenticated user's Solana and EVM wallets
+  const activeUserWallet = getSolanaWalletAddress(user, [], privyWallets);
+  const activeEvmWallet = getEvmWalletAddress(user, privyWallets);
   const destinationAddress = activeUserWallet;
+
+  const handleTriggerBridge = () => {
+    setIsCheckingBridge(true);
+    triggerAutoBridgeNow();
+    setTimeout(() => setIsCheckingBridge(false), 2500);
+  };
 
   const handleAmountChange = (e) => {
     let val = e.target.value;
@@ -214,6 +202,8 @@ export function CenteFiatOnramp({
     } finally {
       setIsLoading(false);
       setView('form');
+      // Automatically trigger Mayan bridge scan for any completed multi-chain deposits
+      triggerAutoBridgeNow();
     }
   };
 
@@ -734,44 +724,87 @@ export function CenteFiatOnramp({
             />
           </div>
 
-          {/* User Wallet Status Badge */}
+          {/* User Wallet Status Badge & Auto-Bridge Indicator */}
           {authenticated && activeUserWallet ? (
-            <div className="flex items-center justify-between bg-[#151a24] border border-[#daa520]/30 rounded-2xl px-3.5 py-2.5 mb-5">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <div className="text-left">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    Deposit to Your Wallet
-                  </div>
-                  <div className="font-mono text-xs font-semibold text-[#daa520]">
-                    {activeUserWallet.slice(0, 5)}...{activeUserWallet.slice(-5)} (Solana)
+            <div className="bg-[#151a24] border border-[#daa520]/30 rounded-2xl p-3.5 mb-5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  <div className="text-left">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      Deposit Destination (Solana)
+                    </div>
+                    <div className="font-mono text-xs font-semibold text-[#daa520]">
+                      {activeUserWallet.slice(0, 5)}...{activeUserWallet.slice(-5)} (Solana)
+                    </div>
                   </div>
                 </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTriggerBridge}
+                    disabled={isCheckingBridge}
+                    title="Scan and auto-bridge multi-chain deposits to your Solana wallet via Mayan"
+                    className="text-slate-300 hover:text-[#daa520] p-1.5 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-800 transition flex items-center gap-1.5 text-[11px] font-medium border border-slate-700/50"
+                  >
+                    <RefreshCw size={12} className={isCheckingBridge ? 'animate-spin text-[#daa520]' : ''} />
+                    <span>{isCheckingBridge ? 'Scanning...' : 'Scan & Bridge'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => logout()}
+                    title="Disconnect"
+                    className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition"
+                  >
+                    <LogOut size={14} />
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => logout()}
-                title="Disconnect"
-                className="text-slate-400 hover:text-white p-1 rounded-lg transition"
-              >
-                <LogOut size={14} />
-              </button>
+
+              {/* Auto-Bridge Active Indicator */}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px]">
+                <div className="flex items-center gap-1.5 text-slate-300">
+                  <Sparkles size={12} className="text-[#daa520]" />
+                  <span>Auto-Bridge to Solana: <strong className="text-emerald-400">Active</strong> (Mayan)</span>
+                </div>
+                {activeEvmWallet && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(activeEvmWallet);
+                      setCopiedEvm(true);
+                      setTimeout(() => setCopiedEvm(false), 2000);
+                    }}
+                    className="text-[10px] font-mono text-slate-400 hover:text-slate-200 transition flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900/60"
+                    title="Click to copy your multi-chain EVM address (Base, ETH, Polygon, BSC)"
+                  >
+                    <span>EVM: {activeEvmWallet.slice(0, 4)}...{activeEvmWallet.slice(-4)}</span>
+                    {copiedEvm ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
-            <div className="flex items-center justify-between bg-[#151a24] border border-[#daa520]/25 rounded-2xl px-3.5 py-2 mb-5">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                  Network
-                </span>
+            <div className="bg-[#151a24] border border-[#daa520]/25 rounded-2xl p-3.5 mb-5 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                    Network
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-[#daa520]">
+                    Solana (SPL)
+                  </span>
+                  <span className="text-[10px] font-medium bg-[#daa520]/15 text-[#daa520] border border-[#daa520]/30 rounded-full px-2 py-0.5">
+                    Direct
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-[#daa520]">
-                  Solana (SPL)
-                </span>
-                <span className="text-[10px] font-medium bg-[#daa520]/15 text-[#daa520] border border-[#daa520]/30 rounded-full px-2 py-0.5">
-                  Direct
-                </span>
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-400 pt-1.5 border-t border-slate-800/80">
+                <Sparkles size={12} className="text-[#daa520]" />
+                <span>Multi-chain deposits automatically bridge to Solana via Mayan</span>
               </div>
             </div>
           )}

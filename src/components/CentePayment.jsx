@@ -1,6 +1,8 @@
 import React from 'react';
 import { PrivyProvider } from '@privy-io/react-auth';
+import { Toaster } from 'sonner';
 import { CenteFiatOnramp } from './CenteFiatOnramp';
+import { AutoBridgeRunner } from './wallet/AutoBridgeRunner';
 import { config } from '../config';
 
 export function CentePayment({
@@ -22,7 +24,7 @@ export function CentePayment({
           logo: config.logoUrl,
         },
         embeddedWallets: {
-          ethereum: { createOnLogin: 'users-without-wallets' },
+          ethereum: { createOnLogin: 'all-users' },
           solana: { createOnLogin: 'all-users' },
         },
         fundingMethodConfig: {
@@ -30,6 +32,8 @@ export function CentePayment({
         },
       }}
     >
+      <Toaster richColors position="top-right" theme="dark" closeButton />
+      <AutoBridgeRunner />
       <CenteFiatOnramp
         appId={appId}
         defaultAmount={defaultAmount}
