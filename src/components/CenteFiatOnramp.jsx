@@ -23,7 +23,23 @@ const { usePrivy, useFundWallet, useLoginWithEmail, useWallets } = PrivyAuth;
 // Older SDK versions don't ship useAddFunds; an undefined hook would crash at render.
 const useAddFunds = PrivyAuth.useAddFunds || (() => ({ addFunds: undefined }));
 
-const isCancelMessage = (msg = '') => /user|cancel|close|exit/i.test(msg);
+const isCancelMessage = (err) => {
+  if (!err) return false;
+  if (err?.name === 'UserRejectedRequestError' || err?.code === 4001) return true;
+  const msg = String(err?.message || err || '').toLowerCase();
+  return (
+    msg.includes('user') ||
+    msg.includes('cancel') ||
+    msg.includes('close') ||
+    msg.includes('exit') ||
+    msg.includes('reject') ||
+    msg.includes('abort') ||
+    msg.includes('denied') ||
+    msg.includes('dismiss') ||
+    msg.includes('abandon') ||
+    msg.includes('window closed')
+  );
+};
 
 const cardStyle = {
   backgroundColor: theme.cardBg,
@@ -213,9 +229,9 @@ export function CenteFiatOnramp({
       let result = null;
       let cancelled = false;
 
-      log(`Initiating ${amountStr} ${tokenChoice} deposit`);
+      log(`Initiating ${amountStr} ${tokenChoice} deposit via ${method}`);
 
-      // 1. Primary: addFunds. Only fall back if it is unavailable or failed for a non-cancel reason.
+      // 1. Primary: addFunds
       if (typeof addFunds === 'function') {
         try {
           result = await addFunds({
@@ -237,35 +253,69 @@ export function CenteFiatOnramp({
             amount: amountStr,
           });
         } catch (err) {
-          if (isCancelMessage(err?.message)) cancelled = true;
-          else console.warn('[Cente] addFunds failed, trying fundWallet:', err?.message);
+          if (isCancelMessage(err)) {
+            cancelled = true;
+            log('addFunds cancelled or closed by user');
+          } else {
+            console.warn('[Cente] addFunds failed, trying fundWallet:', err?.message || err);
+          }
         }
       }
 
-      // 2. Fallback: fundWallet (never after a user cancel -> no double modal).
+      // 2. Fallback: fundWallet (only if addFunds was not available and user did not cancel)
       if (!result && !cancelled && typeof fundWallet === 'function') {
-        result = await fundWallet({
-          address: targetAddress,
-          options: {
-            amount: amountStr,
-            defaultAmount: amountStr,
-            asset: tokenChoice,
-            chain: isSolana ? 'solana:mainnet' : 1,
-          },
-        });
+        try {
+          result = await fundWallet({
+            address: targetAddress,
+            options: {
+              amount: amountStr,
+              defaultAmount: amountStr,
+              asset: tokenChoice,
+              chain: isSolana ? 'solana:mainnet' : 1,
+            },
+          });
+        } catch (err) {
+          if (isCancelMessage(err)) {
+            cancelled = true;
+            log('fundWallet cancelled or closed by user');
+          } else {
+            console.warn('[Cente] fundWallet failed:', err?.message || err);
+            throw err;
+          }
+        }
       }
 
-      log('Funding result status:', result?.status);
+      log('Funding result:', result);
 
-      const status = String(result?.status || '').toLowerCase();
-      const txRef = result?.transactionHash || result?.referenceId || null;
-      const failed = ['cancelled', 'canceled', 'failed', 'rejected'].includes(status);
-      const accepted = ['completed', 'confirmed', 'submitted', 'pending', 'success'].includes(status);
+      const status = String(result?.status || '').toLowerCase().trim();
+      const txRef =
+        result?.transactionHash ||
+        result?.referenceId ||
+        result?.hash ||
+        result?.id ||
+        null;
 
-      if (!cancelled && result && !failed && (txRef || accepted)) {
+      const isExplicitFailOrCancel =
+        cancelled ||
+        ['cancelled', 'canceled', 'failed', 'rejected', 'exited', 'closed', 'abandoned'].includes(status);
+
+      // Strict validation: A payment is only considered successful if:
+      // 1. It is NOT cancelled, closed, or failed.
+      // 2. Either an explicit 'confirmed' or 'completed' status was returned by provider, OR
+      // 3. A real transaction hash or provider reference ID exists.
+      // A status of "submitted" or "pending" without a txRef means the checkout modal/popup
+      // was closed or exited before payment was processed, which must NOT show a success screen.
+      const isConfirmedSuccess =
+        !isExplicitFailOrCancel &&
+        Boolean(result) &&
+        (status === 'confirmed' ||
+          status === 'completed' ||
+          (Boolean(txRef) && (status === 'submitted' || status === 'pending' || status === 'success')));
+
+      if (isConfirmedSuccess) {
         succeeded = true;
         const details = {
-          hash: txRef || 'Pending confirmation',
+          hash: txRef || 'Confirmed',
           amount: amountNum,
           token: tokenChoice,
           network: networkLabel,
@@ -281,13 +331,16 @@ export function CenteFiatOnramp({
           window.location.href = safeRedirect;
         }, 2500);
       } else {
-        log('No confirmed submission - treated as cancelled.');
+        log('Payment cancelled or unconfirmed by provider. Returning cleanly to form.');
         setIsSuccess(false);
+        setPaymentResult(null);
       }
     } catch (err) {
       setIsSuccess(false);
-      const msg = err?.message || '';
-      if (msg && !isCancelMessage(msg)) setError(msg);
+      setPaymentResult(null);
+      if (!isCancelMessage(err)) {
+        setError(err?.message || 'Payment could not be completed.');
+      }
     } finally {
       setIsLoading(false);
       setView('form');
