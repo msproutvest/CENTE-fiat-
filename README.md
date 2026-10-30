@@ -29,7 +29,6 @@ Manual:
 Event: `window.addEventListener('cente-payment-success', e => console.log(e.detail))`
 
 ## Checklist before go-live
-- Privy dashboard: add the Laravel domain to Allowed Origins.
 - CSP: allow Privy auth domain + Meld/MoonPay frames (script-src, frame-src, connect-src).
 - `config.logoUrl` must be an absolute URL.
 - Pin `@privy-io/react-auth` and test one full Solana fund flow (see notes on result shape).
