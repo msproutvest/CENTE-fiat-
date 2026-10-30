@@ -9,16 +9,21 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mayanfinance/swap-sdk": "^15.3.0",
     "@privy-io/react-auth": "^3.50.0",
+    "buffer": "^6.0.3",
     "lucide-react": "^0.475.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sonner": "^2.0.8",
+    "viem": "^2.56.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49",
+    "postcss": "^8.5.32",
     "tailwindcss": "^3.4.15",
-    "vite": "^5.4.11"
+    "vite": "^5.4.21",
+    "vite-plugin-css-injected-by-js": "^3.5.2"
   }
 }

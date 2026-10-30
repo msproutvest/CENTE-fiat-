@@ -1,44 +1,160 @@
-import React, { useState, useEffect } from 'react';
-import { usePrivy, useFundWallet, useAddFunds, useLoginWithEmail } from '@privy-io/react-auth';
-import { ArrowLeft, ArrowRight, Check, CircleAlert, CircleCheck, Mail, Wallet, LogOut } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import * as PrivyAuth from '@privy-io/react-auth';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  CircleAlert,
+  CircleCheck,
+  Mail,
+  LogOut,
+  RefreshCw,
+  Sparkles,
+  Copy,
+} from 'lucide-react';
 import { config, theme, paymentMethods } from '../config';
+import { getSolanaWalletAddress, getEvmWalletAddress } from '../lib/wallet-utils';
+import { safeRedirectUrl, DEFAULT_REDIRECT } from '../lib/safe-redirect';
+import { triggerAutoBridgeNow } from './wallet/AutoBridgeRunner';
+
+export { getSolanaWalletAddress };
+
+const { usePrivy, useFundWallet, useLoginWithEmail, useWallets } = PrivyAuth;
+// Older SDK versions don't ship useAddFunds; an undefined hook would crash at render.
+const useAddFunds = PrivyAuth.useAddFunds || (() => ({ addFunds: undefined }));
 
 /**
- * Extracts the user's Solana wallet address from the Privy user object
+ * Validates that a transaction or provider reference is genuine.
+ * Rejects placeholder status strings (e.g. "Confirmed", "Pending confirmation").
  */
-export function getSolanaWalletAddress(user) {
-  if (!user) return null;
+export const isValidTxRef = (ref) => {
+  if (!ref || typeof ref !== 'string') return false;
+  const s = ref.trim().toLowerCase();
+  const placeholders = [
+    'confirmed',
+    'pending confirmation',
+    'pending',
+    'submitted',
+    'success',
+    'completed',
+    'cancelled',
+    'canceled',
+    'failed',
+    'null',
+    'undefined',
+    'true',
+    'false',
+    '[object object]',
+  ];
+  if (placeholders.includes(s)) return false;
+  // Must look like an on-chain hash or provider reference id (at least 8 chars, alphanumeric/symbols)
+  return s.length >= 8 && /^[a-zA-Z0-9_\-:]+$/.test(ref.trim());
+};
 
-  // 1. Check linkedAccounts for an active Solana wallet
-  if (Array.isArray(user.linkedAccounts)) {
-    const solAccount = user.linkedAccounts.find(
-      (a) =>
-        a.type === 'wallet' &&
-        (a.chainType === 'solana' || (typeof a.address === 'string' && !a.address.startsWith('0x')))
-    );
-    if (solAccount?.address) return solAccount.address;
+export const isCancelMessage = (err) => {
+  if (!err) return false;
+  if (typeof err === 'object') {
+    if (err.name === 'UserRejectedRequestError' || err.code === 4001) return true;
+    if (err.type === 'user_exited' || err.type === 'cancelled' || err.type === 'canceled') return true;
   }
+  const msg = String(err?.message || err?.reason || err || '').toLowerCase();
+  return (
+    msg.includes('user') ||
+    msg.includes('cancel') ||
+    msg.includes('close') ||
+    msg.includes('exit') ||
+    msg.includes('reject') ||
+    msg.includes('abort') ||
+    msg.includes('denied') ||
+    msg.includes('dismiss') ||
+    msg.includes('abandon') ||
+    msg.includes('window closed') ||
+    msg.includes('popup closed')
+  );
+};
 
-  // 2. Check user.wallet if it is a Solana wallet
-  if (
-    user.wallet?.address &&
-    (user.wallet.chainType === 'solana' || !user.wallet.address.startsWith('0x'))
-  ) {
-    return user.wallet.address;
-  }
+const cardStyle = {
+  backgroundColor: theme.cardBg,
+  border: `1px solid ${theme.goldBorder}`,
+  borderRadius: '24px',
+  padding: '30px 26px',
+  boxShadow: '0 10px 40px -10px rgba(212, 175, 55, 0.12)',
+  boxSizing: 'border-box',
+};
 
-  // 3. Fall back to any linked wallet
-  if (Array.isArray(user.linkedAccounts)) {
-    const anyWallet = user.linkedAccounts.find((a) => a.type === 'wallet' && a.address);
-    if (anyWallet?.address) return anyWallet.address;
-  }
+const goldGradient = `linear-gradient(135deg, ${theme.goldPrimary} 0%, ${theme.goldSecondary} 50%, ${theme.goldAccent} 100%)`;
 
-  // 4. Default user.wallet
-  if (user.wallet?.address) {
-    return user.wallet.address;
-  }
+function goldButtonStyle(disabled) {
+  return {
+    width: '100%',
+    padding: '14px 20px',
+    background: goldGradient,
+    color: '#0b0e14',
+    fontWeight: 800,
+    fontSize: '14px',
+    borderRadius: '16px',
+    border: 'none',
+    boxShadow: '0 8px 24px -4px rgba(184, 134, 11, 0.35)',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.6 : 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    fontFamily: theme.fontFamily,
+    touchAction: 'manipulation',
+  };
+}
 
-  return null;
+function ErrorBox({ message }) {
+  if (!message) return null;
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 mb-4"
+      style={{
+        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+        border: '1px solid rgba(245, 158, 11, 0.2)',
+        borderRadius: '12px',
+        padding: '10px 12px',
+        color: '#fcd34d',
+        fontSize: '12px',
+      }}
+    >
+      <CircleAlert size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function BackButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1.5 cursor-pointer"
+      style={{
+        background: 'transparent',
+        border: 'none',
+        color: theme.textSecondary,
+        fontSize: '12px',
+        marginBottom: '18px',
+        padding: 0,
+        fontFamily: theme.fontFamily,
+      }}
+    >
+      <ArrowLeft size={14} /> Back
+    </button>
+  );
+}
+
+function Row({ label, children }) {
+  return (
+    <div className="flex justify-between" style={{ color: theme.textSecondary }}>
+      <span>{label}</span>
+      {children}
+    </div>
+  );
 }
 
 export function CenteFiatOnramp({
@@ -46,17 +162,29 @@ export function CenteFiatOnramp({
   defaultToken = 'USDC',
   appId,
   initialEmail,
-  redirectUrl = 'https://app.gocente.com',
+  redirectUrl = DEFAULT_REDIRECT,
+  allowedRedirectHosts,
   network = 'Solana',
+  minAmount = config.minAmount ?? 1,
+  maxAmount = config.maxAmount,
+  debug = false,
 }) {
   const { user, authenticated, logout } = usePrivy();
+  const { wallets: privyWallets } = useWallets();
   const { addFunds } = useAddFunds();
   const { fundWallet } = useFundWallet();
   const { sendCode, loginWithCode } = useLoginWithEmail();
 
-  const [amount, setAmount] = useState(String(defaultAmount || config.defaultAmount));
+  const log = (...args) => {
+    if (debug) console.log('[Cente]', ...args);
+  };
+
+  const isSolana = String(network || '').toLowerCase().includes('sol');
+  const networkLabel = isSolana ? 'Solana' : String(network);
+  const safeRedirect = safeRedirectUrl(redirectUrl, allowedRedirectHosts);
+
+  const [amount, setAmount] = useState(String(defaultAmount || config.defaultAmount || ''));
   const [selectedToken, setSelectedToken] = useState(defaultToken || 'USDC');
-  const defaultCurrency = 'USD';
   const [selectedMethod, setSelectedMethod] = useState('meld');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -65,57 +193,81 @@ export function CenteFiatOnramp({
   const [view, setView] = useState('form'); // 'form' | 'enter-email' | 'enter-code'
   const [email, setEmail] = useState(initialEmail || '');
   const [otpCode, setOtpCode] = useState('');
+  const [cooldown, setCooldown] = useState(0);
+  const [isCheckingBridge, setIsCheckingBridge] = useState(false);
+  const [copiedEvm, setCopiedEvm] = useState(false);
 
-  // Dynamically fetch the authenticated user's Solana wallet
-  const activeUserWallet = getSolanaWalletAddress(user);
-  const destinationAddress = activeUserWallet;
+  const currency = 'USD';
+  const activeSolWallet = getSolanaWalletAddress(user, [], privyWallets);
+  const activeEvmWallet = getEvmWalletAddress(user, privyWallets);
+  const destinationAddress = isSolana ? activeSolWallet : activeEvmWallet;
+
+  // Always-current wallet address, so async flows can wait for wallet creation.
+  const walletRef = useRef(null);
+  walletRef.current = destinationAddress;
+
+  const redirectTimer = useRef(null);
+  const bridgeTimer = useRef(null);
+  useEffect(
+    () => () => {
+      clearTimeout(redirectTimer.current);
+      clearTimeout(bridgeTimer.current);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [cooldown]);
+
+  const waitForWallet = async (known, timeoutMs = 10000) => {
+    if (known) return known;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (walletRef.current) return walletRef.current;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return null;
+  };
+
+  const handleTriggerBridge = () => {
+    setIsCheckingBridge(true);
+    triggerAutoBridgeNow();
+    clearTimeout(bridgeTimer.current);
+    bridgeTimer.current = setTimeout(() => setIsCheckingBridge(false), 2500);
+  };
 
   const handleAmountChange = (e) => {
-    let val = e.target.value;
-    val = val.replace(/[^0-9.]/g, '');
+    let val = e.target.value.replace(/[^0-9.]/g, '');
     const parts = val.split('.');
-    if (parts.length > 2) {
-      val = parts[0] + '.' + parts.slice(1).join('');
-    }
-    if (val === '') {
-      setAmount('');
-      return;
-    }
+    if (parts.length > 2) val = parts[0] + '.' + parts.slice(1).join('');
     if (val.length > 1 && val.startsWith('0') && val[1] !== '.') {
-      val = val.replace(/^0+/, '');
-      if (val === '') val = '0';
+      val = val.replace(/^0+/, '') || '0';
     }
     setAmount(val);
   };
 
-  const handlePresetAmount = (presetVal) => {
-    setAmount(String(presetVal));
-    setError(null);
-  };
-
-  /**
-   * Executes the funding process with the exact input amount
-   */
-  const executeFunding = async (
-    amountNum,
-    currency,
-    method,
-    tokenChoice = selectedToken,
-    targetAddress = destinationAddress
-  ) => {
+  const executeFunding = async (amountNum, method, tokenChoice, targetAddress) => {
+    let succeeded = false;
     try {
-      let result = null;
-      const tokenMeta = config.solanaTokens[tokenChoice] || config.solanaTokens.USDC;
-      const isSolana = network?.toLowerCase().includes('sol');
-      const amountStr = String(amountNum);
-
       if (!targetAddress) {
-        throw new Error('No Solana wallet found. Please sign in to generate or connect your wallet.');
+        throw new Error(`No ${networkLabel} wallet found. Please sign in to generate or connect your wallet.`);
       }
 
-      console.log(`[Cente] Initiating ${amountStr} ${tokenChoice} deposit to user wallet: ${targetAddress}`);
+      const tokenMeta = config.solanaTokens[tokenChoice] || config.solanaTokens.USDC;
+      const amountStr = String(amountNum);
+      let result = null;
+      let cancelled = false;
 
-      // 1. Primary: Use addFunds directly to forward the EXACT input amount and preferred provider to fiat onramp
+      const providerHint = ['meld', 'moonpay', 'stripe', 'coinbase'].includes(String(method).toLowerCase())
+        ? String(method).toLowerCase()
+        : 'meld';
+
+      log(`Initiating ${amountStr} ${tokenChoice} deposit via ${providerHint}`);
+
+      // 1. Primary: addFunds
       if (typeof addFunds === 'function') {
         try {
           result = await addFunds({
@@ -128,21 +280,25 @@ export function CenteFiatOnramp({
               source: {
                 assets: [currency.toLowerCase()],
                 defaultAsset: currency.toLowerCase(),
-                amount: amountStr,
               },
               defaultAmount: amountStr,
-              amount: amountStr,
-              preferredPaymentMethod: method || selectedMethod,
+              preferredProvider: providerHint,
+              preferredPaymentMethod: 'CREDIT_DEBIT_CARD',
             },
             amount: amountStr,
           });
-        } catch (addFundsErr) {
-          console.warn('[Cente] addFunds flow notice/fallback:', addFundsErr);
+        } catch (err) {
+          if (isCancelMessage(err)) {
+            cancelled = true;
+            log('addFunds cancelled or closed by user');
+          } else {
+            console.warn('[Cente] addFunds error:', err?.message || err);
+          }
         }
       }
 
-      // 2. Fallback: Use fundWallet with explicit amount options if addFunds was unavailable
-      if (!result && typeof fundWallet === 'function') {
+      // 2. Fallback: only if addFunds is NOT a function and user did NOT cancel
+      if (!result && !cancelled && typeof fundWallet === 'function' && typeof addFunds !== 'function') {
         try {
           result = await fundWallet({
             address: targetAddress,
@@ -154,100 +310,117 @@ export function CenteFiatOnramp({
             },
           });
         } catch (err) {
-          console.warn('[Cente] fundWallet Solana token-amount flow notice:', err);
+          if (isCancelMessage(err)) {
+            cancelled = true;
+            log('fundWallet cancelled or closed by user');
+          } else {
+            console.warn('[Cente] fundWallet failed:', err?.message || err);
+            throw err;
+          }
         }
       }
 
-      console.log('[Cente] Funding result:', JSON.stringify(result, null, 2));
+      log('Funding result:', result);
 
-      const txRef =
+      const status = String(result?.status || '').toLowerCase().trim();
+      const rawTxRef =
         result?.transactionHash ||
         result?.referenceId ||
-        (result?.status === 'completed' || result?.status === 'confirmed' ? 'Confirmed' : null);
+        result?.hash ||
+        result?.id ||
+        null;
+      const validTx = isValidTxRef(rawTxRef) ? rawTxRef.trim() : null;
 
-      if (txRef && result?.status !== 'cancelled') {
+      const isExplicitFailOrCancel =
+        cancelled ||
+        ['cancelled', 'canceled', 'failed', 'rejected', 'exited', 'closed', 'abandoned'].includes(status);
+
+      // Strict validation:
+      // 1. Must NOT be explicitly cancelled, closed, or failed.
+      // 2. Must have a non-null result.
+      // 3. For addFunds: status is 'confirmed' or 'submitted'.
+      // 4. For fundWallet (or any flow without explicit provider confirmation):
+      //    status 'completed' is ONLY accepted if an actual validTx is present,
+      //    preventing false success screens when closing/cancelling.
+      const isConfirmedSuccess =
+        !isExplicitFailOrCancel &&
+        Boolean(result) &&
+        (
+          (status === 'confirmed' || status === 'submitted') ||
+          (Boolean(validTx) && (status === 'completed' || status === 'success'))
+        );
+
+      if (isConfirmedSuccess) {
+        succeeded = true;
         const details = {
-          hash: txRef,
+          hash: validTx, // Strictly null if no genuine hash or provider ref exists. NEVER a fake string!
           amount: amountNum,
           token: tokenChoice,
-          network: isSolana ? 'Solana' : network,
-          mint: tokenMeta.mintAddress,
+          network: networkLabel,
+          mint: isSolana ? tokenMeta.mintAddress : null,
           recipient: targetAddress,
-          method: method.toUpperCase(),
+          method: String(method).toUpperCase(),
         };
-
         setIsSuccess(true);
         setPaymentResult(details);
+        window.dispatchEvent(new CustomEvent('cente-payment-success', { detail: details }));
 
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent('cente-payment-success', {
-              detail: details,
-            })
-          );
-        }
-
-        if (redirectUrl) {
-          setTimeout(() => {
-            window.location.href = redirectUrl;
-          }, 2500);
-        }
+        redirectTimer.current = setTimeout(() => {
+          window.location.href = safeRedirect;
+        }, 2500);
       } else {
-        console.log('[Cente] No transaction hash or cancelled — treating as cancelled.');
+        log('Payment cancelled or unconfirmed by provider. Returning cleanly to form.');
         setIsSuccess(false);
+        setPaymentResult(null);
       }
     } catch (err) {
-      console.warn('[Cente] Funding cancelled or error:', err);
       setIsSuccess(false);
-      const msg = err?.message || '';
-      if (
-        !(
-          msg.toLowerCase().includes('user') ||
-          msg.toLowerCase().includes('cancel') ||
-          msg.toLowerCase().includes('close') ||
-          msg.toLowerCase().includes('exit')
-        ) &&
-        msg
-      ) {
-        setError(msg);
+      setPaymentResult(null);
+      if (!isCancelMessage(err)) {
+        setError(err?.message || 'Payment could not be completed.');
       }
     } finally {
       setIsLoading(false);
       setView('form');
+      if (succeeded) triggerAutoBridgeNow();
     }
   };
 
+  const validateAmount = () => {
+    const n = parseFloat(amount) || 0;
+    if (n <= 0) return 'Please enter an amount greater than 0.';
+    if (n < minAmount) return `Minimum deposit is ${minAmount} ${selectedToken}.`;
+    if (maxAmount && n > maxAmount) return `Maximum deposit is ${maxAmount} ${selectedToken}.`;
+    return null;
+  };
+
   const handleStartPayment = async () => {
-    setIsLoading(true);
     setError(null);
 
-    const amountNum = parseFloat(amount) || 0;
-    if (amountNum <= 0) {
-      setError('Please enter an amount greater than 0.');
-      setIsLoading(false);
+    const amountError = validateAmount();
+    if (amountError) {
+      setError(amountError);
       return;
     }
 
-    if ((appId || config.privyAppId).includes('insert-your-privy-app-id')) {
-      setError('Please set your real Privy App ID in src/config.js or data-app-id to launch the onramp.');
-      setIsLoading(false);
+    const id = appId || config.privyAppId || '';
+    if (!id || id.includes('insert-your-privy-app-id')) {
+      setError('Payment is not configured (missing Privy app ID). Please contact support.');
       return;
     }
 
-    // If already authenticated, fetch the user's active wallet and proceed immediately
     if (authenticated) {
-      const targetWallet = activeUserWallet;
-      if (!targetWallet) {
-        setError('Fetching your Solana wallet... please try again in a moment.');
+      setIsLoading(true);
+      const target = await waitForWallet(null, 5000);
+      if (!target) {
+        setError(`Your ${networkLabel} wallet is still being created. Please try again in a moment.`);
         setIsLoading(false);
         return;
       }
-      await executeFunding(amountNum, defaultCurrency, selectedMethod, selectedToken, targetWallet);
+      await executeFunding(parseFloat(amount), selectedMethod, selectedToken, target);
       return;
     }
 
-    // If not authenticated, prompt for email OTP to dynamically create/fetch their wallet
-    setIsLoading(false);
     setView('enter-email');
   };
 
@@ -257,18 +430,27 @@ export function CenteFiatOnramp({
       setError('Please enter a valid email address.');
       return;
     }
-
     setIsLoading(true);
     setError(null);
-
     try {
       await sendCode({ email });
+      setCooldown(30);
       setView('enter-code');
     } catch (err) {
-      console.warn('sendCode error:', err);
       setError(err?.message || 'Failed to send confirmation code. Please try again.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (cooldown > 0) return;
+    setError(null);
+    try {
+      await sendCode({ email });
+      setCooldown(30);
+    } catch (err) {
+      setError(err?.message || 'Could not resend the code. Please try again.');
     }
   };
 
@@ -278,26 +460,33 @@ export function CenteFiatOnramp({
       setError('Please enter the 6-digit confirmation code.');
       return;
     }
-
     setIsLoading(true);
     setError(null);
-    const amountNum = parseFloat(amount) || 0;
 
     try {
       const loginRes = await loginWithCode({ code: otpCode });
-      console.log('[Cente] Login completed:', loginRes);
-
-      // Fetch the logged-in user's wallet address from the response or state
       const loggedInUser = loginRes?.user || user;
-      const targetWallet = getSolanaWalletAddress(loggedInUser) || activeUserWallet;
+      const fromLogin = isSolana
+        ? getSolanaWalletAddress(loggedInUser)
+        : getEvmWalletAddress(loggedInUser, []);
 
-      await executeFunding(amountNum, defaultCurrency, selectedMethod, selectedToken, targetWallet);
+      // Embedded wallet creation is async - wait for it instead of failing immediately.
+      const target = await waitForWallet(fromLogin);
+      if (!target) {
+        setError(`Signed in, but your ${networkLabel} wallet is still being created. Tap Buy again in a moment.`);
+        setIsLoading(false);
+        setView('form');
+        return;
+      }
+      await executeFunding(parseFloat(amount) || 0, selectedMethod, selectedToken, target);
     } catch (err) {
-      console.warn('loginWithCode error:', err);
       setError(err?.message || 'Invalid or expired confirmation code.');
       setIsLoading(false);
     }
   };
+
+  const amountNum = parseFloat(amount) || 0;
+  const buyDisabled = isLoading || amountNum <= 0;
 
   return (
     <div
@@ -309,19 +498,9 @@ export function CenteFiatOnramp({
         WebkitTextSizeAdjust: '100%',
       }}
     >
-      {/* 1. SUCCESS VIEW */}
       {isSuccess && paymentResult ? (
-        <div
-          className="cente-card rounded-3xl p-7 sm:p-8 text-center"
-          style={{
-            backgroundColor: theme.cardBg,
-            border: `1px solid ${theme.goldBorder}`,
-            borderRadius: '24px',
-            padding: '32px 28px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
-            boxSizing: 'border-box',
-          }}
-        >
+        /* 1. SUCCESS VIEW */
+        <div className="text-center" style={{ ...cardStyle, padding: '32px 28px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
           <div
             className="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center"
             style={{
@@ -332,21 +511,16 @@ export function CenteFiatOnramp({
           >
             <CircleCheck size={36} />
           </div>
-          <h3
-            className="text-white text-2xl font-bold mb-1.5"
-            style={{ color: theme.textPrimary, fontSize: '22px', fontWeight: 700, margin: '0 0 6px' }}
-          >
-            Deposit Successful
+          <h3 style={{ color: theme.textPrimary, fontSize: '22px', fontWeight: 700, margin: '0 0 6px' }}>
+            Payment Submitted
           </h3>
-          <p
-            className="text-slate-400 text-[13px] mb-6"
-            style={{ color: theme.textSecondary, fontSize: '13px', margin: '0 0 24px' }}
-          >
-            Your {paymentResult.amount} {paymentResult.token} has been settled on the Solana network.
+          <p style={{ color: theme.textSecondary, fontSize: '13px', margin: '0 0 24px' }}>
+            Your {paymentResult.amount} {paymentResult.token} is on its way to your {paymentResult.network} wallet.
+            Funds arrive once the payment provider settles.
           </p>
 
           <div
-            className="bg-[#0b0e14] rounded-2xl border border-slate-800/80 p-4 px-5 text-left text-xs leading-relaxed mb-6 space-y-2"
+            className="space-y-2"
             style={{
               backgroundColor: theme.inputBg,
               borderRadius: '16px',
@@ -358,71 +532,62 @@ export function CenteFiatOnramp({
               marginBottom: '24px',
             }}
           >
-            <div className="flex justify-between" style={{ display: 'flex', justifyContent: 'space-between', color: theme.textSecondary }}>
-              <span>Amount:</span>
+            <Row label="Amount:">
               <strong style={{ color: theme.textPrimary, fontSize: '14px' }}>
                 {paymentResult.amount} {paymentResult.token}
               </strong>
-            </div>
-            <div className="flex justify-between" style={{ display: 'flex', justifyContent: 'space-between', color: theme.textSecondary }}>
-              <span>Network:</span>
-              <span className="text-[#daa520] font-semibold" style={{ color: theme.goldAccent, fontWeight: 600 }}>
-                Solana (Mainnet)
-              </span>
-            </div>
-            <div className="flex justify-between" style={{ display: 'flex', justifyContent: 'space-between', color: theme.textSecondary }}>
-              <span>Method:</span>
-              <span className="font-semibold text-white" style={{ color: '#ffffff', fontWeight: 600 }}>
-                {paymentResult.method}
-              </span>
-            </div>
+            </Row>
+            <Row label="Network:">
+              <span style={{ color: theme.goldAccent, fontWeight: 600 }}>{paymentResult.network}</span>
+            </Row>
+            <Row label="Method:">
+              <span style={{ color: '#ffffff', fontWeight: 600 }}>{paymentResult.method}</span>
+            </Row>
             {paymentResult.recipient && (
-              <div className="flex justify-between" style={{ display: 'flex', justifyContent: 'space-between', color: theme.textSecondary }}>
-                <span>Recipient Wallet:</span>
-                <span className="font-mono text-[11px] text-[#daa520]" title={paymentResult.recipient}>
+              <Row label="Recipient Wallet:">
+                <span className="font-mono text-[11px]" style={{ color: theme.goldAccent }} title={paymentResult.recipient}>
                   {paymentResult.recipient.slice(0, 4)}...{paymentResult.recipient.slice(-4)}
                 </span>
-              </div>
+              </Row>
             )}
             {paymentResult.mint && (
-              <div className="flex justify-between" style={{ display: 'flex', justifyContent: 'space-between', color: theme.textSecondary }}>
-                <span>Token Mint:</span>
-                <span className="font-mono text-[11px] text-slate-400" title={paymentResult.mint}>
+              <Row label="Token Mint:">
+                <span className="font-mono text-[11px]" style={{ color: '#94a3b8' }} title={paymentResult.mint}>
                   {paymentResult.mint.slice(0, 6)}...{paymentResult.mint.slice(-6)}
                 </span>
-              </div>
+              </Row>
             )}
-            <div
-              className="mt-2.5 pt-2.5 border-t border-slate-800/80 break-all"
-              style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #1e293b', wordBreak: 'break-all' }}
-            >
-              <span className="text-slate-500 block mb-0.5" style={{ color: theme.textMuted, display: 'block', marginBottom: '2px' }}>
-                Transaction Ref:
-              </span>
-              <code className="text-[11px] text-slate-400 font-mono" style={{ fontSize: '11px', color: '#94a3b8' }}>
-                {paymentResult.hash}
-              </code>
-            </div>
+            {paymentResult.hash && isValidTxRef(paymentResult.hash) ? (
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #1e293b', wordBreak: 'break-all' }}>
+                <span style={{ color: theme.textMuted, display: 'block', marginBottom: '2px' }}>Transaction Ref:</span>
+                {paymentResult.network === 'Solana' && paymentResult.hash.length >= 40 ? (
+                  <a
+                    href={`https://solscan.io/tx/${paymentResult.hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono underline"
+                    style={{ fontSize: '11px', color: theme.goldAccent }}
+                  >
+                    {paymentResult.hash}
+                  </a>
+                ) : (
+                  <code className="font-mono" style={{ fontSize: '11px', color: '#94a3b8' }}>
+                    {paymentResult.hash}
+                  </code>
+                )}
+              </div>
+            ) : null}
           </div>
 
-          <div className="mb-4" style={{ marginBottom: '18px' }}>
-            <p
-              className="text-[#daa520] text-[13px] font-semibold mb-1"
-              style={{ color: theme.goldAccent, fontSize: '13px', fontWeight: 600, margin: '0 0 4px' }}
-            >
-              Redirecting back to your Cente dashboard...
-            </p>
-            <p
-              className="text-slate-500 text-[11px] m-0"
-              style={{ color: theme.textMuted, fontSize: '11px', margin: 0 }}
-            >
-              If you are not redirected automatically in a few seconds, click below.
-            </p>
-          </div>
+          <p style={{ color: theme.goldAccent, fontSize: '13px', fontWeight: 600, margin: '0 0 4px' }}>
+            Redirecting back to your Cente dashboard...
+          </p>
+          <p style={{ color: theme.textMuted, fontSize: '11px', margin: '0 0 18px' }}>
+            If you are not redirected automatically in a few seconds, click below.
+          </p>
 
           <a
-            href={redirectUrl || 'https://app.gocente.com'}
-            className="block w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-center no-underline text-sm font-semibold transition"
+            href={safeRedirect}
             style={{
               display: 'block',
               width: '100%',
@@ -440,371 +605,270 @@ export function CenteFiatOnramp({
           </a>
         </div>
       ) : view === 'enter-email' ? (
-        /* 2. EMAIL CODE REQUEST VIEW */
-        <div
-          className="cente-card rounded-3xl p-7 sm:p-8"
-          style={{
-            backgroundColor: theme.cardBg,
-            border: `1px solid ${theme.goldBorder}`,
-            borderRadius: '24px',
-            padding: '30px 26px',
-            boxShadow: '0 10px 40px -10px rgba(212, 175, 55, 0.12)',
-            boxSizing: 'border-box',
-          }}
-        >
-          <button
-            type="button"
+        /* 2. EMAIL VIEW */
+        <div style={cardStyle}>
+          <BackButton
             onClick={() => {
               setView('form');
               setError(null);
             }}
-            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 cursor-pointer mb-4 bg-transparent border-0 p-0"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: theme.textSecondary,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '12px',
-              cursor: 'pointer',
-              marginBottom: '18px',
-              padding: 0,
-            }}
-          >
-            <ArrowLeft size={14} /> Back
-          </button>
-
-          <div className="text-center mb-5" style={{ textAlign: 'center', marginBottom: '22px' }}>
+          />
+          <div className="text-center" style={{ marginBottom: '22px' }}>
             <img
               src={config.logoUrl}
               alt="Cente"
-              className="h-9 w-auto inline-block mb-3.5"
               style={{ height: '36px', width: 'auto', display: 'inline-block', marginBottom: '14px' }}
             />
-            <h3
-              className="text-white text-xl font-bold mb-1.5"
-              style={{ color: theme.textPrimary, fontSize: '19px', fontWeight: 700, margin: '0 0 6px' }}
-            >
+            <h3 style={{ color: theme.textPrimary, fontSize: '19px', fontWeight: 700, margin: '0 0 6px' }}>
               Sign in to fetch your wallet
             </h3>
-            <p
-              className="text-slate-400 text-[13px] m-0"
-              style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}
-            >
-              We'll send a 6-digit confirmation code to access your Solana wallet
+            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}>
+              We'll send a 6-digit confirmation code to access your {networkLabel} wallet
             </p>
           </div>
 
           <form onSubmit={handleSendEmailCode}>
-            <div className="mb-4" style={{ marginBottom: '18px' }}>
-              <div
-                className="flex items-center bg-[#0b0e14] border border-slate-800/80 rounded-2xl p-3 px-4 focus-within:border-[#daa520] focus-within:ring-1 focus-within:ring-[#daa520]/20"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  backgroundColor: theme.inputBg,
-                  border: '1px solid #1e293b',
-                  borderRadius: '16px',
-                  padding: '12px 16px',
-                  boxSizing: 'border-box',
-                }}
-              >
-                <Mail
-                  size={18}
-                  className="text-[#daa520] mr-2.5"
-                  style={{ color: theme.goldAccent, marginRight: '10px' }}
-                />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="your@email.com"
-                  className="w-full bg-transparent border-0 outline-none text-white text-base placeholder:text-slate-600"
-                  style={{
-                    width: '100%',
-                    background: 'transparent',
-                    border: 'none',
-                    outline: 'none',
-                    color: '#ffffff',
-                    fontSize: '16px',
-                    fontFamily: theme.fontFamily,
-                  }}
-                />
-              </div>
-            </div>
-
-            {error && (
-              <div
-                className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5 px-3 text-amber-300 text-xs flex items-start gap-2 mb-4"
-                style={{
-                  backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                  border: '1px solid rgba(245, 158, 11, 0.2)',
-                  borderRadius: '12px',
-                  padding: '10px 12px',
-                  color: '#fcd34d',
-                  fontSize: '12px',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '8px',
-                  marginBottom: '16px',
-                }}
-              >
-                <CircleAlert size={15} className="flex-shrink-0 mt-0.5" style={{ flexShrink: 0, marginTop: '2px' }} />
-                <span>{error}</span>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full py-3.5 px-5 gold-gradient-bg text-black font-bold text-sm rounded-2xl shadow-lg shadow-[#b8860b]/25 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2 hover:brightness-110 transition-all duration-150"
+            <div
+              className="flex items-center"
               style={{
-                width: '100%',
-                padding: '14px 20px',
-                background: `linear-gradient(135deg, ${theme.goldPrimary} 0%, ${theme.goldSecondary} 50%, ${theme.goldAccent} 100%)`,
-                color: '#0b0e14',
-                fontWeight: 800,
-                fontSize: '14px',
+                backgroundColor: theme.inputBg,
+                border: '1px solid #1e293b',
                 borderRadius: '16px',
-                border: 'none',
-                boxShadow: '0 8px 24px -4px rgba(184, 134, 11, 0.35)',
-                cursor: isLoading ? 'not-allowed' : 'pointer',
-                opacity: isLoading ? 0.6 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                fontFamily: theme.fontFamily,
+                padding: '12px 16px',
+                marginBottom: '18px',
+                boxSizing: 'border-box',
               }}
             >
+              <Mail size={18} style={{ color: theme.goldAccent, marginRight: '10px' }} />
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="your@email.com"
+                style={{
+                  width: '100%',
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: '#ffffff',
+                  fontSize: '16px',
+                  fontFamily: theme.fontFamily,
+                }}
+              />
+            </div>
+            <ErrorBox message={error} />
+            <button type="submit" disabled={isLoading} style={goldButtonStyle(isLoading)}>
               {isLoading ? 'Sending Code...' : 'Continue'}
             </button>
           </form>
         </div>
       ) : view === 'enter-code' ? (
-        /* 3. OTP CODE VERIFICATION VIEW */
-        <div
-          className="cente-card rounded-3xl p-7 sm:p-8"
-          style={{
-            backgroundColor: theme.cardBg,
-            border: `1px solid ${theme.goldBorder}`,
-            borderRadius: '24px',
-            padding: '30px 26px',
-            boxShadow: '0 10px 40px -10px rgba(212, 175, 55, 0.12)',
-            boxSizing: 'border-box',
-          }}
-        >
-          <button
-            type="button"
+        /* 3. OTP VIEW */
+        <div style={cardStyle}>
+          <BackButton
             onClick={() => {
               setView('enter-email');
+              setOtpCode('');
               setError(null);
             }}
-            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 cursor-pointer mb-4 bg-transparent border-0 p-0"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: theme.textSecondary,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              fontSize: '12px',
-              cursor: 'pointer',
-              marginBottom: '18px',
-              padding: 0,
-            }}
-          >
-            <ArrowLeft size={14} /> Back
-          </button>
-
-          <div className="text-center mb-5" style={{ textAlign: 'center', marginBottom: '22px' }}>
-            <h3
-              className="text-white text-xl font-bold mb-1.5"
-              style={{ color: theme.textPrimary, fontSize: '19px', fontWeight: 700, margin: '0 0 6px' }}
-            >
+          />
+          <div className="text-center" style={{ marginBottom: '22px' }}>
+            <h3 style={{ color: theme.textPrimary, fontSize: '19px', fontWeight: 700, margin: '0 0 6px' }}>
               Check your email
             </h3>
-            <p
-              className="text-slate-400 text-[13px] m-0"
-              style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}
-            >
-              Enter the 6-digit code sent to <strong className="text-white" style={{ color: '#ffffff' }}>{email}</strong>
+            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}>
+              Enter the 6-digit code sent to <strong style={{ color: '#ffffff' }}>{email}</strong>
             </p>
           </div>
 
           <form onSubmit={handleVerifyCode}>
-            <div className="mb-4" style={{ marginBottom: '18px' }}>
-              <input
-                type="text"
-                maxLength={6}
-                autoFocus
-                required
-                value={otpCode}
-                onChange={(e) => setOtpCode(e.target.value.trim())}
-                placeholder="123456"
-                className="w-full bg-[#0b0e14] border border-slate-800/80 rounded-2xl p-3.5 px-4 text-white text-2xl font-bold text-center tracking-[0.25em] outline-none focus:border-[#daa520] focus:ring-1 focus:ring-[#daa520]/20"
-                style={{
-                  width: '100%',
-                  backgroundColor: theme.inputBg,
-                  border: '1px solid #1e293b',
-                  borderRadius: '16px',
-                  padding: '14px 16px',
-                  color: '#ffffff',
-                  fontSize: '24px',
-                  fontWeight: 800,
-                  textAlign: 'center',
-                  letterSpacing: '0.25em',
-                  fontFamily: theme.fontFamily,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-
-            {error && (
-              <div
-                className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-2.5 px-3 text-amber-300 text-xs flex items-start gap-2 mb-4"
-                style={{
-                  backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                  border: '1px solid rgba(245, 158, 11, 0.2)',
-                  borderRadius: '12px',
-                  padding: '10px 12px',
-                  color: '#fcd34d',
-                  fontSize: '12px',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '8px',
-                  marginBottom: '16px',
-                }}
-              >
-                <CircleAlert size={15} className="flex-shrink-0 mt-0.5" style={{ flexShrink: 0, marginTop: '2px' }} />
-                <span>{error}</span>
-              </div>
-            )}
-
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]*"
+              maxLength={6}
+              autoFocus
+              required
+              value={otpCode}
+              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="123456"
+              style={{
+                width: '100%',
+                backgroundColor: theme.inputBg,
+                border: '1px solid #1e293b',
+                borderRadius: '16px',
+                padding: '14px 16px',
+                color: '#ffffff',
+                fontSize: '24px',
+                fontWeight: 800,
+                textAlign: 'center',
+                letterSpacing: '0.25em',
+                fontFamily: theme.fontFamily,
+                outline: 'none',
+                boxSizing: 'border-box',
+                marginBottom: '18px',
+              }}
+            />
+            <ErrorBox message={error} />
             <button
               type="submit"
               disabled={isLoading || otpCode.length < 6}
-              className="w-full py-3.5 px-5 gold-gradient-bg text-black font-bold text-sm rounded-2xl shadow-lg shadow-[#b8860b]/25 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2 hover:brightness-110 transition-all duration-150"
+              style={goldButtonStyle(isLoading || otpCode.length < 6)}
+            >
+              {isLoading ? 'Verifying & Opening Payment...' : 'Verify & Continue'}
+            </button>
+            <button
+              type="button"
+              onClick={handleResendCode}
+              disabled={cooldown > 0}
               style={{
                 width: '100%',
-                padding: '14px 20px',
-                background: `linear-gradient(135deg, ${theme.goldPrimary} 0%, ${theme.goldSecondary} 50%, ${theme.goldAccent} 100%)`,
-                color: '#0b0e14',
-                fontWeight: 800,
-                fontSize: '14px',
-                borderRadius: '16px',
+                marginTop: '12px',
+                background: 'transparent',
                 border: 'none',
-                boxShadow: '0 8px 24px -4px rgba(184, 134, 11, 0.35)',
-                cursor: isLoading || otpCode.length < 6 ? 'not-allowed' : 'pointer',
-                opacity: isLoading || otpCode.length < 6 ? 0.6 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
+                color: cooldown > 0 ? theme.textMuted : theme.goldAccent,
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: cooldown > 0 ? 'not-allowed' : 'pointer',
                 fontFamily: theme.fontFamily,
               }}
             >
-              {isLoading ? 'Verifying & Opening Payment...' : 'Verify & Continue'}
+              {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
             </button>
           </form>
         </div>
       ) : (
-        /* 4. MAIN DEPOSIT FORM VIEW */
-        <div
-          className="cente-card rounded-3xl p-7 sm:p-8"
-          style={{
-            backgroundColor: theme.cardBg,
-            border: `1px solid ${theme.goldBorder}`,
-            borderRadius: '24px',
-            padding: '30px 26px',
-            boxShadow: '0 10px 40px -10px rgba(212, 175, 55, 0.12)',
-            boxSizing: 'border-box',
-          }}
-        >
-          {/* Header & Logo */}
-          <div className="text-center mb-5" style={{ textAlign: 'center', marginBottom: '20px' }}>
-            <img
-              src={config.logoUrl}
-              alt="Cente"
-              className="h-9 w-auto inline-block"
-              style={{ height: '38px', width: 'auto', display: 'inline-block' }}
-            />
+        /* 4. MAIN FORM VIEW */
+        <div style={cardStyle}>
+          <div className="text-center" style={{ marginBottom: '20px' }}>
+            <img src={config.logoUrl} alt="Cente" style={{ height: '38px', width: 'auto', display: 'inline-block' }} />
           </div>
 
-          {/* User Wallet Status Badge */}
-          {authenticated && activeUserWallet ? (
-            <div className="flex items-center justify-between bg-[#151a24] border border-[#daa520]/30 rounded-2xl px-3.5 py-2.5 mb-5">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <div className="text-left">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    Deposit to Your Wallet
-                  </div>
-                  <div className="font-mono text-xs font-semibold text-[#daa520]">
-                    {activeUserWallet.slice(0, 5)}...{activeUserWallet.slice(-5)} (Solana)
+          {authenticated && destinationAddress ? (
+            <div className="bg-[#151a24] border border-[#daa520]/30 rounded-2xl p-3.5 mb-5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  <div className="text-left">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      Deposit Destination ({networkLabel})
+                    </div>
+                    <div className="font-mono text-xs font-semibold text-[#daa520]">
+                      {destinationAddress.slice(0, 5)}...{destinationAddress.slice(-5)}
+                    </div>
                   </div>
                 </div>
+                <div className="flex items-center gap-1.5">
+                  {isSolana && (
+                    <button
+                      type="button"
+                      onClick={handleTriggerBridge}
+                      disabled={isCheckingBridge}
+                      title="Scan and auto-bridge multi-chain deposits to your Solana wallet via Mayan"
+                      className="text-slate-300 hover:text-[#daa520] p-1.5 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-800 transition flex items-center gap-1.5 text-[11px] font-medium border border-slate-700/50"
+                    >
+                      <RefreshCw size={12} className={isCheckingBridge ? 'animate-spin text-[#daa520]' : ''} />
+                      <span>{isCheckingBridge ? 'Scanning...' : 'Scan & Bridge'}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => logout()}
+                    title="Disconnect"
+                    aria-label="Disconnect"
+                    className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition"
+                  >
+                    <LogOut size={14} />
+                  </button>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => logout()}
-                title="Disconnect"
-                className="text-slate-400 hover:text-white p-1 rounded-lg transition"
-              >
-                <LogOut size={14} />
-              </button>
+
+              {isSolana && (
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px]">
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <Sparkles size={12} className="text-[#daa520]" />
+                    <span>
+                      Auto-Bridge to Solana: <strong className="text-emerald-400">Active</strong>
+                    </span>
+                  </div>
+                  {activeEvmWallet && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(activeEvmWallet);
+                        setCopiedEvm(true);
+                        setTimeout(() => setCopiedEvm(false), 2000);
+                      }}
+                      className="text-[10px] font-mono text-slate-400 hover:text-slate-200 transition flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900/60"
+                      title="Click to copy your multi-chain EVM address (Base, ETH, Polygon, BSC)"
+                    >
+                      <span>
+                        EVM: {activeEvmWallet.slice(0, 4)}...{activeEvmWallet.slice(-4)}
+                      </span>
+                      {copiedEvm ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="flex items-center justify-between bg-[#151a24] border border-[#daa520]/25 rounded-2xl px-3.5 py-2 mb-5">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                  Network
-                </span>
+            <div className="bg-[#151a24] border border-[#daa520]/25 rounded-2xl p-3.5 mb-5 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Network</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-[#daa520]">{isSolana ? 'Solana (SPL)' : networkLabel}</span>
+                  <span className="text-[10px] font-medium bg-[#daa520]/15 text-[#daa520] border border-[#daa520]/30 rounded-full px-2 py-0.5">
+                    Direct
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-[#daa520]">
-                  Solana (SPL)
-                </span>
-                <span className="text-[10px] font-medium bg-[#daa520]/15 text-[#daa520] border border-[#daa520]/30 rounded-full px-2 py-0.5">
-                  Direct
-                </span>
-              </div>
+              {isSolana && (
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-400 pt-1.5 border-t border-slate-800/80">
+                  <Sparkles size={12} className="text-[#daa520]" />
+                  <span>Multi-chain deposits automatically bridge to Solana via Mayan</span>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Token Selector: USDC vs USDT */}
+          {/* Token selector */}
           <div className="mb-4">
             <label
-              className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2"
+              className="block mb-2"
               style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary }}
             >
-              Select Token on Solana
+              Select Token on {networkLabel}
             </label>
-            <div className="grid grid-cols-2 gap-2 bg-[#0b0e14] border border-slate-800/80 rounded-2xl p-1">
+            <div className="grid grid-cols-2 gap-2 bg-[#0b0e14] border border-slate-800/80 rounded-2xl p-1" role="radiogroup" aria-label="Token">
               {['USDC', 'USDT'].map((tok) => {
                 const isActive = selectedToken === tok;
                 return (
                   <button
                     key={tok}
                     type="button"
+                    role="radio"
+                    aria-checked={isActive}
                     onClick={() => setSelectedToken(tok)}
-                    className={`py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    className="py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                    style={
                       isActive
-                        ? 'gold-gradient-bg text-black shadow-md shadow-[#b8860b]/20'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                    }`}
+                        ? { background: goldGradient, color: '#0b0e14', border: 'none' }
+                        : { background: 'transparent', color: '#94a3b8', border: 'none' }
+                    }
                   >
                     <span>{tok}</span>
                     <span
-                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold ${
-                        isActive
-                          ? 'bg-black/20 text-black'
-                          : 'bg-slate-800 text-slate-500'
-                      }`}
+                      className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold"
+                      style={{
+                        backgroundColor: isActive ? 'rgba(0,0,0,0.2)' : '#1e293b',
+                        color: isActive ? '#0b0e14' : '#64748b',
+                      }}
                     >
                       SPL
                     </span>
@@ -814,28 +878,23 @@ export function CenteFiatOnramp({
             </div>
           </div>
 
-          {/* Amount input */}
-          <div className="mb-5" style={{ marginBottom: '22px' }}>
-            <div className="flex justify-between items-center mb-2" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          {/* Amount */}
+          <div style={{ marginBottom: '22px' }}>
+            <div className="flex justify-between items-center" style={{ marginBottom: '8px' }}>
               <label
-                className="text-[11px] font-bold uppercase tracking-wider text-slate-400"
+                htmlFor="cente-amount"
                 style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary }}
               >
                 Deposit Amount ({selectedToken})
               </label>
-              <span
-                className="text-xs font-semibold text-[#daa520]"
-                style={{ fontSize: '12px', fontWeight: 600, color: theme.goldAccent }}
-              >
+              <span style={{ fontSize: '12px', fontWeight: 600, color: theme.goldAccent }}>
                 {amount || '0'} {selectedToken}
               </span>
             </div>
 
             <div
-              className="flex items-center bg-[#0b0e14] border border-slate-800/80 rounded-2xl p-2.5 px-4 focus-within:border-[#daa520] focus-within:ring-1 focus-within:ring-[#daa520]/20"
+              className="flex items-center"
               style={{
-                display: 'flex',
-                alignItems: 'center',
                 backgroundColor: theme.inputBg,
                 border: '1px solid #1e293b',
                 borderRadius: '16px',
@@ -844,12 +903,12 @@ export function CenteFiatOnramp({
               }}
             >
               <input
+                id="cente-amount"
                 type="text"
                 inputMode="decimal"
                 value={amount}
                 onChange={handleAmountChange}
                 placeholder="20"
-                className="w-full bg-transparent border-0 outline-none text-white text-2xl font-bold font-sans placeholder:text-slate-600"
                 style={{
                   width: '100%',
                   background: 'transparent',
@@ -862,7 +921,7 @@ export function CenteFiatOnramp({
                 }}
               />
               <div
-                className="bg-[#daa520]/20 text-[#daa520] border border-[#daa520]/30 rounded-xl px-3.5 py-1.5 text-[13px] font-bold tracking-wider select-none flex items-center flex-shrink-0"
+                className="select-none flex items-center flex-shrink-0"
                 style={{
                   backgroundColor: 'rgba(218, 165, 32, 0.15)',
                   color: theme.goldAccent,
@@ -873,73 +932,69 @@ export function CenteFiatOnramp({
                   fontWeight: 700,
                   letterSpacing: '0.05em',
                   marginLeft: '8px',
-                  userSelect: 'none',
-                  display: 'flex',
-                  alignItems: 'center',
-                  flexShrink: 0,
                 }}
               >
                 {selectedToken}
               </div>
             </div>
 
-            {/* Quick Preset Buttons */}
             <div className="grid grid-cols-4 gap-1.5 mt-2.5">
-              {[20, 50, 100, 250].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => handlePresetAmount(preset)}
-                  className={`py-1 text-xs rounded-lg font-semibold transition border ${
-                    String(amount) === String(preset)
-                      ? 'border-[#daa520] text-[#daa520] bg-[#daa520]/10'
-                      : 'border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
-                  }`}
-                >
-                  ${preset}
-                </button>
-              ))}
+              {[20, 50, 100, 250].map((preset) => {
+                const active = String(amount) === String(preset);
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      setAmount(String(preset));
+                      setError(null);
+                    }}
+                    className="py-1 text-xs rounded-lg font-semibold transition"
+                    style={{
+                      background: active ? 'rgba(218, 165, 32, 0.1)' : 'transparent',
+                      color: active ? theme.goldAccent : '#94a3b8',
+                      border: `1px solid ${active ? theme.goldAccent : '#1e293b'}`,
+                      fontFamily: theme.fontFamily,
+                    }}
+                  >
+                    ${preset}
+                  </button>
+                );
+              })}
             </div>
 
-            <div
-              className="flex justify-between items-center mt-2 px-1 text-[11px] text-slate-500"
-              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', padding: '0 4px', fontSize: '11px', color: theme.textMuted }}
-            >
+            <div className="flex justify-between items-center" style={{ marginTop: '8px', padding: '0 4px', fontSize: '11px', color: theme.textMuted }}>
               <span>
                 Target:{' '}
-                <strong className="text-[#d4af37] font-semibold" style={{ color: theme.goldSecondary, fontWeight: 600 }}>
+                <strong style={{ color: theme.goldSecondary, fontWeight: 600 }}>
                   {amount || '0'} {selectedToken}
                 </strong>
               </span>
-              <span className="text-slate-500" style={{ color: '#64748b' }}>
-                1 {selectedToken} ≈ $1 USD
-              </span>
+              <span style={{ color: '#64748b' }}>1 {selectedToken} ≈ $1 USD</span>
             </div>
           </div>
 
-          {/* Payment Method selector */}
-          <div className="mb-6" style={{ marginBottom: '24px' }}>
-            <label
-              className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2.5"
-              style={{ display: 'block', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary, marginBottom: '10px' }}
+          {/* Payment method */}
+          <div style={{ marginBottom: '24px' }}>
+            <div
+              id="cente-method-label"
+              style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary, marginBottom: '10px' }}
             >
               Payment Method
-            </label>
+            </div>
 
-            <div className="flex flex-col gap-2.5" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div role="radiogroup" aria-labelledby="cente-method-label" className="flex flex-col" style={{ gap: '10px' }}>
               {paymentMethods.map((method) => {
                 const Icon = method.icon;
                 const isSelected = selectedMethod === method.id;
-
                 return (
-                  <div
+                  <button
                     key={method.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={isSelected}
                     onClick={() => setSelectedMethod(method.id)}
-                    className={`cursor-pointer p-3.5 px-4 rounded-2xl border transition-all duration-150 flex items-center justify-between ${
-                      isSelected
-                        ? 'border-[#daa520] bg-[#151a24] shadow-[0_0_14px_rgba(218,165,32,0.16)]'
-                        : 'border-slate-800/80 bg-[#0b0e14]/60 hover:border-slate-700 hover:bg-[#0b0e14]'
-                    }`}
+                    className="flex items-center justify-between text-left"
                     style={{
                       cursor: 'pointer',
                       padding: '14px 16px',
@@ -947,45 +1002,29 @@ export function CenteFiatOnramp({
                       border: isSelected ? `1px solid ${theme.goldBorderActive}` : '1px solid #1e293b',
                       backgroundColor: isSelected ? theme.methodSelectedBg : theme.methodBg,
                       boxShadow: isSelected ? theme.goldGlow : 'none',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
                       transition: 'all 0.15s ease',
                       boxSizing: 'border-box',
+                      width: '100%',
+                      fontFamily: theme.fontFamily,
                     }}
                   >
-                    <div className="flex items-center gap-3" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div className="flex items-center" style={{ gap: '12px' }}>
                       <div
-                        className={`p-2.5 rounded-xl flex items-center justify-center ${
-                          isSelected
-                            ? 'bg-[#b8860b]/20 text-[#daa520] border border-[#daa520]/30'
-                            : 'bg-slate-800 text-slate-400 border-0'
-                        }`}
+                        className="flex items-center justify-center"
                         style={{
                           padding: '10px',
                           borderRadius: '12px',
                           backgroundColor: isSelected ? 'rgba(184, 134, 11, 0.2)' : '#1e293b',
                           color: isSelected ? theme.goldAccent : '#94a3b8',
                           border: isSelected ? '1px solid rgba(218, 165, 32, 0.3)' : 'none',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
                         }}
                       >
                         <Icon size={18} />
                       </div>
-
                       <div>
-                        <div className="flex items-center gap-1.5" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span className="font-semibold text-sm text-white" style={{ fontWeight: 600, fontSize: '14px', color: '#ffffff' }}>
-                            {method.name}
-                          </span>
+                        <div className="flex items-center" style={{ gap: '6px' }}>
+                          <span style={{ fontWeight: 600, fontSize: '14px', color: '#ffffff' }}>{method.name}</span>
                           <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              isSelected
-                                ? 'bg-[#daa520]/20 text-[#daa520] border border-[#daa520]/30'
-                                : 'bg-slate-800 text-slate-400 border border-slate-700'
-                            }`}
                             style={{
                               fontSize: '10px',
                               fontWeight: 700,
@@ -999,18 +1038,12 @@ export function CenteFiatOnramp({
                             {method.tag}
                           </span>
                         </div>
-                        <p className="mt-0.5 text-[11px] text-slate-400" style={{ margin: '2px 0 0', fontSize: '11px', color: theme.textSecondary }}>
-                          {method.subtitle}
-                        </p>
+                        <p style={{ margin: '2px 0 0', fontSize: '11px', color: theme.textSecondary }}>{method.subtitle}</p>
                       </div>
                     </div>
 
                     <div
-                      className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 ${
-                        isSelected
-                          ? 'border-[#daa520] bg-[#daa520] text-black'
-                          : 'border-slate-700 bg-transparent'
-                      }`}
+                      className="flex items-center justify-center flex-shrink-0"
                       style={{
                         width: '18px',
                         height: '18px',
@@ -1018,72 +1051,31 @@ export function CenteFiatOnramp({
                         border: isSelected ? `1px solid ${theme.goldAccent}` : '1px solid #475569',
                         backgroundColor: isSelected ? theme.goldAccent : 'transparent',
                         color: '#000000',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
                       }}
                     >
                       {isSelected && <Check size={11} strokeWidth={3} />}
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           </div>
 
-          {error && (
-            <div
-              className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 text-amber-300 text-xs flex items-start gap-2 mb-5"
-              style={{
-                backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                border: '1px solid rgba(245, 158, 11, 0.2)',
-                borderRadius: '12px',
-                padding: '12px',
-                color: '#fcd34d',
-                fontSize: '12px',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '8px',
-                marginBottom: '20px',
-              }}
-            >
-              <CircleAlert size={16} className="flex-shrink-0 mt-0.5" style={{ flexShrink: 0, marginTop: '2px' }} />
-              <span>{error}</span>
-            </div>
-          )}
+          <ErrorBox message={error} />
 
           <button
             type="button"
             onClick={handleStartPayment}
-            disabled={isLoading || (parseFloat(amount) || 0) <= 0}
-            className="w-full py-4 px-5 gold-gradient-bg text-black font-bold text-sm rounded-2xl shadow-lg shadow-[#b8860b]/25 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 flex items-center justify-center gap-2 hover:brightness-110 transition-all duration-150"
-            style={{
-              width: '100%',
-              padding: '15px 20px',
-              background: `linear-gradient(135deg, ${theme.goldPrimary} 0%, ${theme.goldSecondary} 50%, ${theme.goldAccent} 100%)`,
-              color: '#0b0e14',
-              fontWeight: 800,
-              fontSize: '14px',
-              borderRadius: '16px',
-              border: 'none',
-              boxShadow: '0 8px 24px -4px rgba(184, 134, 11, 0.35)',
-              cursor: isLoading || (parseFloat(amount) || 0) <= 0 ? 'not-allowed' : 'pointer',
-              opacity: isLoading || (parseFloat(amount) || 0) <= 0 ? 0.6 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              fontFamily: theme.fontFamily,
-              touchAction: 'manipulation',
-              transition: 'transform 0.1s ease, filter 0.15s ease',
-            }}
+            disabled={buyDisabled}
+            style={{ ...goldButtonStyle(buyDisabled), padding: '15px 20px' }}
           >
             {isLoading ? (
               <span>Processing...</span>
             ) : (
               <>
-                <span>Buy {amount || '0'} {selectedToken} on Solana</span>
+                <span>
+                  Buy {amount || '0'} {selectedToken} on {networkLabel}
+                </span>
                 <ArrowRight size={16} />
               </>
             )}
@@ -1093,4 +1085,5 @@ export function CenteFiatOnramp({
     </div>
   );
 }
+
 export default CenteFiatOnramp;
