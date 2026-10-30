@@ -23,10 +23,41 @@ const { usePrivy, useFundWallet, useLoginWithEmail, useWallets } = PrivyAuth;
 // Older SDK versions don't ship useAddFunds; an undefined hook would crash at render.
 const useAddFunds = PrivyAuth.useAddFunds || (() => ({ addFunds: undefined }));
 
-const isCancelMessage = (err) => {
+/**
+ * Validates that a transaction or provider reference is genuine.
+ * Rejects placeholder status strings (e.g. "Confirmed", "Pending confirmation").
+ */
+export const isValidTxRef = (ref) => {
+  if (!ref || typeof ref !== 'string') return false;
+  const s = ref.trim().toLowerCase();
+  const placeholders = [
+    'confirmed',
+    'pending confirmation',
+    'pending',
+    'submitted',
+    'success',
+    'completed',
+    'cancelled',
+    'canceled',
+    'failed',
+    'null',
+    'undefined',
+    'true',
+    'false',
+    '[object object]',
+  ];
+  if (placeholders.includes(s)) return false;
+  // Must look like an on-chain hash or provider reference id (at least 8 chars, alphanumeric/symbols)
+  return s.length >= 8 && /^[a-zA-Z0-9_\-:]+$/.test(ref.trim());
+};
+
+export const isCancelMessage = (err) => {
   if (!err) return false;
-  if (err?.name === 'UserRejectedRequestError' || err?.code === 4001) return true;
-  const msg = String(err?.message || err || '').toLowerCase();
+  if (typeof err === 'object') {
+    if (err.name === 'UserRejectedRequestError' || err.code === 4001) return true;
+    if (err.type === 'user_exited' || err.type === 'cancelled' || err.type === 'canceled') return true;
+  }
+  const msg = String(err?.message || err?.reason || err || '').toLowerCase();
   return (
     msg.includes('user') ||
     msg.includes('cancel') ||
@@ -37,7 +68,8 @@ const isCancelMessage = (err) => {
     msg.includes('denied') ||
     msg.includes('dismiss') ||
     msg.includes('abandon') ||
-    msg.includes('window closed')
+    msg.includes('window closed') ||
+    msg.includes('popup closed')
   );
 };
 
@@ -229,7 +261,11 @@ export function CenteFiatOnramp({
       let result = null;
       let cancelled = false;
 
-      log(`Initiating ${amountStr} ${tokenChoice} deposit via ${method}`);
+      const providerHint = ['meld', 'moonpay', 'stripe', 'coinbase'].includes(String(method).toLowerCase())
+        ? String(method).toLowerCase()
+        : 'meld';
+
+      log(`Initiating ${amountStr} ${tokenChoice} deposit via ${providerHint}`);
 
       // 1. Primary: addFunds
       if (typeof addFunds === 'function') {
@@ -244,11 +280,10 @@ export function CenteFiatOnramp({
               source: {
                 assets: [currency.toLowerCase()],
                 defaultAsset: currency.toLowerCase(),
-                amount: amountStr,
               },
               defaultAmount: amountStr,
-              amount: amountStr,
-              preferredPaymentMethod: method,
+              preferredProvider: providerHint,
+              preferredPaymentMethod: 'CREDIT_DEBIT_CARD',
             },
             amount: amountStr,
           });
@@ -257,13 +292,13 @@ export function CenteFiatOnramp({
             cancelled = true;
             log('addFunds cancelled or closed by user');
           } else {
-            console.warn('[Cente] addFunds failed, trying fundWallet:', err?.message || err);
+            console.warn('[Cente] addFunds error:', err?.message || err);
           }
         }
       }
 
-      // 2. Fallback: fundWallet (only if addFunds was not available and user did not cancel)
-      if (!result && !cancelled && typeof fundWallet === 'function') {
+      // 2. Fallback: only if addFunds is NOT a function and user did NOT cancel
+      if (!result && !cancelled && typeof fundWallet === 'function' && typeof addFunds !== 'function') {
         try {
           result = await fundWallet({
             address: targetAddress,
@@ -288,34 +323,37 @@ export function CenteFiatOnramp({
       log('Funding result:', result);
 
       const status = String(result?.status || '').toLowerCase().trim();
-      const txRef =
+      const rawTxRef =
         result?.transactionHash ||
         result?.referenceId ||
         result?.hash ||
         result?.id ||
         null;
+      const validTx = isValidTxRef(rawTxRef) ? rawTxRef.trim() : null;
 
       const isExplicitFailOrCancel =
         cancelled ||
         ['cancelled', 'canceled', 'failed', 'rejected', 'exited', 'closed', 'abandoned'].includes(status);
 
-      // Strict validation: A payment is only considered successful if:
-      // 1. It is NOT cancelled, closed, or failed.
-      // 2. Either an explicit 'confirmed' or 'completed' status was returned by provider, OR
-      // 3. A real transaction hash or provider reference ID exists.
-      // A status of "submitted" or "pending" without a txRef means the checkout modal/popup
-      // was closed or exited before payment was processed, which must NOT show a success screen.
+      // Strict validation:
+      // 1. Must NOT be explicitly cancelled, closed, or failed.
+      // 2. Must have a non-null result.
+      // 3. For addFunds: status is 'confirmed' or 'submitted'.
+      // 4. For fundWallet (or any flow without explicit provider confirmation):
+      //    status 'completed' is ONLY accepted if an actual validTx is present,
+      //    preventing false success screens when closing/cancelling.
       const isConfirmedSuccess =
         !isExplicitFailOrCancel &&
         Boolean(result) &&
-        (status === 'confirmed' ||
-          status === 'completed' ||
-          (Boolean(txRef) && (status === 'submitted' || status === 'pending' || status === 'success')));
+        (
+          (status === 'confirmed' || status === 'submitted') ||
+          (Boolean(validTx) && (status === 'completed' || status === 'success'))
+        );
 
       if (isConfirmedSuccess) {
         succeeded = true;
         const details = {
-          hash: txRef || 'Confirmed',
+          hash: validTx, // Strictly null if no genuine hash or provider ref exists. NEVER a fake string!
           amount: amountNum,
           token: tokenChoice,
           network: networkLabel,
@@ -519,12 +557,26 @@ export function CenteFiatOnramp({
                 </span>
               </Row>
             )}
-            <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #1e293b', wordBreak: 'break-all' }}>
-              <span style={{ color: theme.textMuted, display: 'block', marginBottom: '2px' }}>Transaction Ref:</span>
-              <code className="font-mono" style={{ fontSize: '11px', color: '#94a3b8' }}>
-                {paymentResult.hash}
-              </code>
-            </div>
+            {paymentResult.hash && isValidTxRef(paymentResult.hash) ? (
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #1e293b', wordBreak: 'break-all' }}>
+                <span style={{ color: theme.textMuted, display: 'block', marginBottom: '2px' }}>Transaction Ref:</span>
+                {paymentResult.network === 'Solana' && paymentResult.hash.length >= 40 ? (
+                  <a
+                    href={`https://solscan.io/tx/${paymentResult.hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono underline"
+                    style={{ fontSize: '11px', color: theme.goldAccent }}
+                  >
+                    {paymentResult.hash}
+                  </a>
+                ) : (
+                  <code className="font-mono" style={{ fontSize: '11px', color: '#94a3b8' }}>
+                    {paymentResult.hash}
+                  </code>
+                )}
+              </div>
+            ) : null}
           </div>
 
           <p style={{ color: theme.goldAccent, fontSize: '13px', fontWeight: 600, margin: '0 0 4px' }}>

@@ -19,6 +19,7 @@ assets
 .env*.local
 
 # Editor directories and files
+.culprit/
 .vscode/*
 !.vscode/extensions.json
 .idea
