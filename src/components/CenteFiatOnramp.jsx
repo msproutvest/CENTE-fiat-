@@ -240,7 +240,6 @@ function Line({ label, children }) {
 function Brand() {
   return (
     <div className="co-brand">
-      <div className="co-mark" aria-hidden="true">HV</div>
       <div>
         <div className="co-brand-name">HalalVest</div>
         <div className="co-brand-sub">Shariah stock trading & wealth</div>
