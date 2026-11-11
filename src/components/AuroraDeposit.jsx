@@ -1,23 +1,41 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import QRCode from 'qrcode';
 import {
+  ArrowLeft,
   Copy,
   Check,
   RefreshCw,
   AlertTriangle,
-  ExternalLink,
   ShieldCheck,
-  Zap,
-  Clock,
-  ArrowRight,
-  CircleCheck,
+  ChevronRight,
+  Info,
 } from 'lucide-react';
-import { config, theme } from '../config';
+import { config } from '../config';
 import { getAuroraDepositAddress, getAuroraDepositStatus } from '../services/auroraIntents';
 
 export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, onBack }) {
-  const networks = config.aurora?.networks || [];
-  const [selectedNetworkId, setSelectedNetworkId] = useState(networks[0]?.id || 'usdt-tron');
+  const assets = config.cryptoDepositAssets || [];
+
+  // 1. Coin / Asset selection (null by default - do not autopick)
+  const [selectedAssetSymbol, setSelectedAssetSymbol] = useState(null);
+
+  // 2. Network selection (null by default - do not autopick)
+  const [selectedNetworkId, setSelectedNetworkId] = useState(null);
+
+  const selectedAsset = useMemo(
+    () => (selectedAssetSymbol ? assets.find((a) => a.symbol === selectedAssetSymbol) : null),
+    [assets, selectedAssetSymbol]
+  );
+
+  const selectedNetwork = useMemo(
+    () =>
+      selectedAsset && selectedNetworkId
+        ? selectedAsset.networks.find((n) => n.id === selectedNetworkId)
+        : null,
+    [selectedAsset, selectedNetworkId]
+  );
+
+  // Deposit address and QR states
   const [depositAddress, setDepositAddress] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,15 +44,30 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
   const [deposits, setDeposits] = useState([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const selectedNetwork =
-    networks.find((n) => n.id === selectedNetworkId) || networks[0];
-
-  // Fetch or generate persistent deposit address whenever network or solana address changes
+  // Fetch or generate deposit address once both asset and network are chosen
   useEffect(() => {
     let isMounted = true;
 
     async function loadAddress() {
-      if (!solanaAddress || !selectedNetwork) return;
+      if (!solanaAddress || !selectedNetwork || !selectedAsset) return;
+
+      // Special Case: Direct Solana SPL deposit
+      if (selectedNetwork.isDirectSolana) {
+        setDepositAddress(solanaAddress);
+        setError(null);
+        setLoading(false);
+        try {
+          const dataUrl = await QRCode.toDataURL(solanaAddress, {
+            width: 180,
+            margin: 1,
+            color: { dark: '#10b981', light: '#09120e' },
+          });
+          if (isMounted) setQrCodeDataUrl(dataUrl);
+        } catch (qrErr) {
+          console.warn('[Deposit] QR generation error:', qrErr);
+        }
+        return;
+      }
 
       if (!apiKey) {
         setError('Deposit service key is not configured.');
@@ -59,24 +92,22 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
         if (res?.depositAddress) {
           setDepositAddress(res.depositAddress);
 
-          // Generate QR code client-side
           try {
             const dataUrl = await QRCode.toDataURL(res.depositAddress, {
-              width: 200,
+              width: 180,
               margin: 1,
-              color: {
-                dark: '#daa520',
-                light: '#0b0e14',
-              },
+              color: { dark: '#10b981', light: '#09120e' },
             });
             if (isMounted) setQrCodeDataUrl(dataUrl);
           } catch (qrErr) {
-            console.warn('[AuroraDeposit] QR code generation error:', qrErr);
+            console.warn('[Deposit] QR generation error:', qrErr);
           }
+        } else {
+          setError('Could not generate deposit address. Please try another network.');
         }
       } catch (err) {
         if (!isMounted) return;
-        setError(err?.message || 'Failed to generate deposit address. Please try again.');
+        setError(err?.message || 'Failed to generate deposit address. Please try another network.');
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -87,11 +118,11 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
     return () => {
       isMounted = false;
     };
-  }, [selectedNetworkId, solanaAddress]);
+  }, [selectedNetworkId, selectedAssetSymbol, solanaAddress, apiKey]);
 
   // Status polling for incoming deposits
   const checkStatus = async () => {
-    if (!depositAddress || !apiKey) return;
+    if (!depositAddress || !apiKey || selectedNetwork?.isDirectSolana) return;
     setIsRefreshing(true);
     try {
       const res = await getAuroraDepositStatus({ depositAddress, apiKey });
@@ -103,12 +134,12 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
   };
 
   useEffect(() => {
-    if (!depositAddress) return;
+    if (!depositAddress || selectedNetwork?.isDirectSolana) return;
 
     checkStatus();
-    const interval = setInterval(checkStatus, 7000);
+    const interval = setInterval(checkStatus, 8000);
     return () => clearInterval(interval);
-  }, [depositAddress]);
+  }, [depositAddress, selectedNetworkId]);
 
   const handleCopy = async () => {
     if (!depositAddress) return;
@@ -117,7 +148,6 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback
       const ta = document.createElement('textarea');
       ta.value = depositAddress;
       document.body.appendChild(ta);
@@ -129,324 +159,320 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
     }
   };
 
-  return (
-    <div className="space-y-4" style={{ fontFamily: theme.fontFamily }}>
-      {/* Network / Asset Selector Tabs */}
-      <div>
-        <label
-          className="block text-xs font-semibold mb-2"
-          style={{ color: theme.textSecondary }}
-        >
-          Select Deposit Asset & Network
-        </label>
-        <div className="grid grid-cols-2 gap-2">
-          {networks.map((net) => {
-            const isSelected = net.id === selectedNetworkId;
-            return (
-              <button
-                key={net.id}
-                type="button"
-                onClick={() => setSelectedNetworkId(net.id)}
-                className="p-3 rounded-xl text-left transition flex flex-col justify-between"
-                style={{
-                  background: isSelected ? theme.methodSelectedBg : theme.methodBg,
-                  border: isSelected
-                    ? `1.5px solid ${theme.goldAccent}`
-                    : `1px solid rgba(255, 255, 255, 0.08)`,
-                  boxShadow: isSelected ? theme.goldGlow : 'none',
-                  cursor: 'pointer',
-                }}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span
-                    className="font-bold text-xs"
-                    style={{ color: isSelected ? theme.goldAccent : theme.textPrimary }}
-                  >
-                    {net.symbol}
-                  </span>
+  // STEP 1: ASK USER FOR THE ASSET FIRST (No autopick)
+  if (!selectedAsset) {
+    return (
+      <div className="space-y-3 text-white">
+        <div>
+          <h4 className="text-sm font-bold text-white">Select Coin</h4>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Choose the cryptocurrency you want to deposit
+          </p>
+        </div>
+
+        <div className="space-y-2 pt-1">
+          {assets.map((asset) => (
+            <button
+              key={asset.symbol}
+              type="button"
+              onClick={() => {
+                setSelectedAssetSymbol(asset.symbol);
+                setSelectedNetworkId(null);
+                setError(null);
+              }}
+              className="w-full p-3 rounded-2xl bg-[#09120e] border border-emerald-500/20 hover:border-emerald-500/50 hover:bg-[#0c1913] transition flex items-center justify-between cursor-pointer text-left group"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-emerald-950/60 border border-emerald-500/25 flex items-center justify-center overflow-hidden shrink-0">
+                  <img
+                    src={asset.icon}
+                    alt={asset.symbol}
+                    className="w-5 h-5 object-contain"
+                    onError={(e) => {
+                      e.target.style.display = 'none';
+                    }}
+                  />
+                </div>
+                <div>
+                  <div className="font-extrabold text-sm text-white group-hover:text-emerald-300 transition">
+                    {asset.symbol}
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-medium">{asset.name}</div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-slate-400 font-semibold">
+                  {asset.networks?.length} {asset.networks?.length === 1 ? 'network' : 'networks'}
+                </span>
+                <ChevronRight
+                  size={16}
+                  className="text-slate-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition"
+                />
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // STEP 2: ASK USER FOR THE NETWORK NEXT (No autopick)
+  if (!selectedNetwork) {
+    return (
+      <div className="space-y-3 text-white">
+        {/* Back to coins button + active coin indicator */}
+        <div className="flex items-center justify-between pb-2 border-b border-emerald-500/15">
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedAssetSymbol(null);
+              setSelectedNetworkId(null);
+              setError(null);
+            }}
+            className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
+          >
+            <ArrowLeft size={14} />
+            <span>Back to Coins</span>
+          </button>
+          <div className="flex items-center gap-2">
+            <img src={selectedAsset.icon} alt={selectedAsset.symbol} className="w-4 h-4 object-contain" />
+            <span className="text-xs font-bold text-white">{selectedAsset.symbol}</span>
+          </div>
+        </div>
+
+        <div>
+          <h4 className="text-sm font-bold text-white">Select Network</h4>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Ensure your withdrawal network matches the deposit network
+          </p>
+        </div>
+
+        <div className="space-y-2 pt-1">
+          {selectedAsset.networks?.map((net) => (
+            <button
+              key={net.id}
+              type="button"
+              onClick={() => {
+                setSelectedNetworkId(net.id);
+                setError(null);
+              }}
+              className="w-full p-3 rounded-2xl bg-[#09120e] border border-emerald-500/20 hover:border-emerald-500/50 hover:bg-[#0c1913] transition flex items-center justify-between cursor-pointer text-left group"
+            >
+              <div className="min-w-0 pr-2">
+                <div className="font-bold text-xs text-white flex items-center gap-2 group-hover:text-emerald-300 transition">
+                  <span>{net.networkName}</span>
                   {net.badge && (
-                    <span
-                      className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
-                      style={{
-                        background: isSelected ? 'rgba(218, 165, 32, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                        color: isSelected ? '#fcd34d' : theme.textSecondary,
-                      }}
-                    >
+                    <span className="text-[9px] px-1.5 py-0.2 rounded-full font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                       {net.badge}
                     </span>
                   )}
                 </div>
-                <div className="text-[11px]" style={{ color: theme.textSecondary }}>
-                  {net.protocol}
+                <div className="text-[10px] text-slate-400 mt-1">
+                  Protocol: {net.protocol} • Min: {net.minDeposit} • Arrival: {net.estimatedArrival}
                 </div>
-              </button>
-            );
-          })}
+              </div>
+
+              <ChevronRight
+                size={16}
+                className="text-slate-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition shrink-0"
+              />
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // STEP 3: BOTH SELECTED — ONLY ADDRESS SCAN, INSTRUCTIONS & BACK BUTTON (No long page, no dropdowns)
+  return (
+    <div className="space-y-3.5 text-white">
+      {/* Top Header: Back Button + Selected Pair indicator */}
+      <div className="flex items-center justify-between pb-2 border-b border-emerald-500/15">
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedNetworkId(null);
+            setDepositAddress('');
+            setQrCodeDataUrl('');
+            setError(null);
+          }}
+          className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
+        >
+          <ArrowLeft size={14} />
+          <span>Back</span>
+        </button>
+
+        <div className="flex items-center gap-2">
+          <img src={selectedAsset.icon} alt={selectedAsset.symbol} className="w-4 h-4 object-contain" />
+          <span className="text-xs font-extrabold text-white">{selectedAsset.symbol}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 font-semibold border border-emerald-500/25">
+            {selectedNetwork.protocol}
+          </span>
         </div>
       </div>
 
-      {/* Loading State */}
+      {/* Loading state */}
       {loading && (
-        <div
-          className="flex flex-col items-center justify-center p-8 rounded-2xl"
-          style={{
-            background: theme.inputBg,
-            border: `1px solid ${theme.goldBorder}`,
-          }}
-        >
-          <RefreshCw
-            size={24}
-            className="animate-spin mb-3"
-            style={{ color: theme.goldAccent }}
-          />
-          <p className="text-xs" style={{ color: theme.textSecondary }}>
-            Generating personal deposit address...
+        <div className="flex flex-col items-center justify-center p-8 rounded-2xl bg-[#09120e] border border-emerald-500/20">
+          <RefreshCw size={24} className="animate-spin mb-3 text-emerald-400" />
+          <p className="text-xs text-slate-400 text-center">
+            Generating {selectedAsset.symbol} ({selectedNetwork.networkName}) deposit address...
           </p>
         </div>
       )}
 
-      {/* Error State */}
+      {/* Error state */}
       {error && !loading && (
-        <div
-          className="p-4 rounded-xl flex items-start gap-2.5"
-          style={{
-            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-            border: '1px solid rgba(239, 68, 68, 0.25)',
-            color: '#f87171',
-            fontSize: '12px',
-          }}
-        >
+        <div className="p-4 rounded-xl flex items-start gap-2.5 bg-red-500/10 border border-red-500/25 text-red-400 text-xs">
           <AlertTriangle size={16} className="shrink-0 mt-0.5" />
           <div className="flex-1">
             <p className="font-semibold mb-1">Deposit Address Unavailable</p>
-            <p className="text-[11px] opacity-90">{error}</p>
+            <p className="text-[11px] opacity-90 mb-2">{error}</p>
             <button
               type="button"
-              onClick={() => setSelectedNetworkId((prev) => prev)}
-              className="mt-2 text-[11px] font-bold underline cursor-pointer"
-              style={{ color: theme.goldAccent }}
+              onClick={() => setSelectedNetworkId(null)}
+              className="text-[11px] font-bold text-emerald-400 underline hover:text-emerald-300"
             >
-              Retry
+              Choose another network
             </button>
           </div>
         </div>
       )}
 
-      {/* Address & QR Code View */}
+      {/* Address Scan, Deposit Address & Instructions */}
       {depositAddress && !loading && (
         <div className="space-y-3">
-          {/* QR Code Container */}
-          <div
-            className="flex flex-col items-center justify-center p-4 rounded-2xl"
-            style={{
-              background: theme.inputBg,
-              border: `1px solid ${theme.goldBorder}`,
-            }}
-          >
-            <div
-              className="p-2 rounded-xl"
-              style={{
-                background: '#0b0e14',
-                border: `1px solid ${theme.goldBorder}`,
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
-              }}
-            >
+          {/* Address Scan: QR Code */}
+          <div className="flex flex-col items-center justify-center p-3.5 rounded-2xl bg-[#09120e] border border-emerald-500/25">
+            <div className="p-2 rounded-xl bg-[#060c09] border border-emerald-500/30 shadow-lg">
               {qrCodeDataUrl ? (
                 <img
                   src={qrCodeDataUrl}
-                  alt={`${selectedNetwork.symbol} Deposit QR`}
+                  alt={`${selectedAsset.symbol} Deposit QR`}
                   className="w-36 h-36 rounded-lg select-none"
                 />
               ) : (
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(
-                    depositAddress
-                  )}&bgcolor=0b0e14&color=daa520&margin=3`}
-                  alt="Deposit QR"
-                  className="w-36 h-36 rounded-lg select-none"
-                />
+                <div className="w-36 h-36 rounded-lg flex items-center justify-center text-xs text-slate-400">
+                  QR loading...
+                </div>
               )}
             </div>
-            <span
-              className="text-[11px] mt-2.5 font-medium"
-              style={{ color: theme.textSecondary }}
-            >
-              Scan with your {selectedNetwork.symbol} wallet
+            <span className="text-[11px] mt-2 text-slate-400 text-center">
+              Scan with your {selectedAsset.symbol} ({selectedNetwork.protocol}) wallet
             </span>
           </div>
 
-          {/* Address Box */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-xs px-0.5">
-              <span className="font-semibold" style={{ color: theme.textSecondary }}>
-                Your {selectedNetwork.protocol} Deposit Address
+          {/* Deposit Address Box */}
+          <div className="p-3 rounded-2xl bg-[#09120e] border border-emerald-500/30 space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400 text-[11px] font-semibold">
+                {selectedAsset.symbol} Deposit Address
               </span>
-              <span
-                className="text-[10px] font-medium flex items-center gap-1"
-                style={{ color: '#4ade80' }}
-              >
-                <ShieldCheck size={12} /> Auto-Swaps to Solana
+              <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                <ShieldCheck size={11} /> Verified
               </span>
             </div>
 
-            <div
-              className="flex items-center gap-2 p-3 rounded-xl"
+            <div className="p-2.5 rounded-xl bg-[#060c09] border border-emerald-500/20 font-mono text-xs text-white break-all select-all font-semibold leading-relaxed">
+              {depositAddress}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="w-full py-2.5 px-3 rounded-xl font-bold text-xs cursor-pointer transition flex items-center justify-center gap-2 text-white"
               style={{
-                background: theme.inputBg,
-                border: `1px solid rgba(212, 175, 55, 0.3)`,
+                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                boxShadow: '0 4px 14px -2px rgba(16, 185, 129, 0.4)',
               }}
             >
-              <code
-                className="flex-1 font-mono text-[11px] break-all select-all font-semibold leading-relaxed"
-                style={{ color: theme.goldAccent }}
-              >
-                {depositAddress}
-              </code>
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="p-2 rounded-lg transition shrink-0 active:scale-95 flex items-center justify-center cursor-pointer"
-                style={{
-                  background: copied ? 'rgba(74, 222, 128, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                  color: copied ? '#4ade80' : theme.textPrimary,
-                  border: copied ? '1px solid rgba(74, 222, 128, 0.3)' : '1px solid rgba(255, 255, 255, 0.1)',
-                }}
-                title="Copy address"
-              >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-              </button>
+              {copied ? (
+                <>
+                  <Check size={14} />
+                  <span>Copied to Clipboard!</span>
+                </>
+              ) : (
+                <>
+                  <Copy size={14} />
+                  <span>Copy Address</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Instructions */}
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200/90 leading-relaxed">
+            Send only <strong className="text-white font-bold">{selectedAsset.symbol}</strong> via the{' '}
+            <strong className="text-white font-bold">{selectedNetwork.networkName} ({selectedNetwork.protocol})</strong>{' '}
+            network to this address. Sending any other asset may result in permanent loss.
+          </div>
+
+          {/* Specifications Table */}
+          <div className="p-3 rounded-xl bg-[#060c09] border border-emerald-500/20 text-[11px] space-y-1.5">
+            <div className="flex justify-between">
+              <span className="text-slate-400">Minimum Deposit</span>
+              <span className="font-bold text-white">{selectedNetwork.minDeposit || '$2'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Expected Arrival</span>
+              <span className="font-bold text-emerald-400">{selectedNetwork.estimatedArrival || '~1 min'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Network Standard</span>
+              <span className="font-bold text-white">{selectedNetwork.protocol}</span>
             </div>
           </div>
 
-          {/* Details / Instructions Panel */}
-          <div
-            className="p-3.5 rounded-xl text-[11px] space-y-2"
-            style={{
-              background: 'rgba(11, 14, 20, 0.6)',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              color: theme.textSecondary,
-            }}
-          >
-            <div className="flex justify-between items-center">
-              <span>Network</span>
-              <span className="font-semibold" style={{ color: theme.textPrimary }}>
-                {selectedNetwork.networkName}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span>Minimum Deposit</span>
-              <span className="font-semibold" style={{ color: theme.goldAccent }}>
-                {selectedNetwork.minDeposit}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span>Arrival Time</span>
-              <span className="flex items-center gap-1 font-semibold" style={{ color: theme.textPrimary }}>
-                <Clock size={11} /> {selectedNetwork.estimatedArrival}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span>Delivery Recipient</span>
-              <span
-                className="font-mono text-[10px] font-semibold"
-                style={{ color: theme.goldAccent }}
-              >
-                {solanaAddress ? `${solanaAddress.slice(0, 4)}...${solanaAddress.slice(-4)}` : 'Solana Wallet'}
-              </span>
-            </div>
-          </div>
-
-          {/* Live Status Tracker */}
-          <div
-            className="p-3 rounded-xl flex items-center justify-between text-xs"
-            style={{
-              background: 'rgba(11, 14, 20, 0.8)',
-              border: '1px solid rgba(212, 175, 55, 0.15)',
-            }}
-          >
+          {/* Deposit Detection Bar */}
+          <div className="p-2.5 rounded-xl bg-emerald-950/20 border border-emerald-500/20 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span className="text-[11px]" style={{ color: theme.textSecondary }}>
-                Listening for incoming deposits...
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="text-slate-300 text-[11px]">
+                {deposits.length > 0 ? `${deposits.length} Deposit(s) Detected` : 'Listening for incoming deposits...'}
               </span>
             </div>
             <button
               type="button"
               onClick={checkStatus}
               disabled={isRefreshing}
-              className="text-[10px] font-semibold flex items-center gap-1 px-2 py-1 rounded-lg cursor-pointer transition hover:opacity-80"
-              style={{
-                color: theme.goldAccent,
-                background: 'rgba(218, 165, 32, 0.1)',
-                border: '1px solid rgba(218, 165, 32, 0.2)',
-              }}
+              className="text-slate-400 hover:text-emerald-400 text-[11px] flex items-center gap-1 cursor-pointer"
             >
-              <RefreshCw size={10} className={isRefreshing ? 'animate-spin' : ''} />
-              Refresh
+              <RefreshCw size={11} className={isRefreshing ? 'animate-spin text-emerald-400' : ''} />
+              <span>Refresh</span>
             </button>
           </div>
 
-          {/* Incoming Activity / History if detected */}
+          {/* Detected Deposits List */}
           {deposits.length > 0 && (
-            <div
-              className="p-3 rounded-xl space-y-2"
-              style={{
-                background: 'rgba(16, 20, 29, 0.95)',
-                border: '1px solid rgba(74, 222, 128, 0.3)',
-              }}
-            >
-              <div className="text-[11px] font-bold flex items-center gap-1.5" style={{ color: '#4ade80' }}>
-                <CircleCheck size={13} />
-                Recent Deposit Activity
-              </div>
-              {deposits.slice(0, 3).map((dep, idx) => (
+            <div className="space-y-1.5">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Recent Deposits
+              </span>
+              {deposits.map((dep, idx) => (
                 <div
-                  key={idx}
-                  className="flex items-center justify-between text-[11px] py-1 border-t border-white/5"
+                  key={dep.id || idx}
+                  className="p-2.5 rounded-xl bg-[#060c09] border border-emerald-500/25 flex items-center justify-between text-xs"
                 >
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-semibold text-white">
-                      {dep.amount ? `${dep.amount} ` : ''}{dep.asset}
-                    </span>
-                    <span
-                      className="text-[9px] px-1.5 py-0.5 rounded capitalize font-medium"
-                      style={{
-                        background: dep.status === 'success' ? 'rgba(74, 222, 128, 0.2)' : 'rgba(250, 204, 21, 0.2)',
-                        color: dep.status === 'success' ? '#4ade80' : '#facc15',
-                      }}
-                    >
-                      {dep.status}
-                    </span>
+                  <div>
+                    <div className="font-bold text-white">
+                      {dep.amount || 'Deposit'} {selectedAsset.symbol}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {dep.status || 'Processing'}
+                    </div>
                   </div>
-                  {dep.txHash && (
-                    <span className="font-mono text-[9px] text-gray-400">
-                      {dep.txHash.slice(0, 6)}...{dep.txHash.slice(-4)}
-                    </span>
-                  )}
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">
+                    {dep.status || 'Success'}
+                  </span>
                 </div>
               ))}
             </div>
           )}
-
-          {/* Safety Notice */}
-          <div
-            className="p-2.5 rounded-xl flex items-center gap-2 text-[10px]"
-            style={{
-              background: 'rgba(245, 158, 11, 0.08)',
-              border: '1px solid rgba(245, 158, 11, 0.2)',
-              color: '#fcd34d',
-            }}
-          >
-            <AlertTriangle size={13} className="shrink-0" />
-            <span>
-              Send only <strong>{selectedNetwork.symbol}</strong> via <strong>{selectedNetwork.protocol}</strong>. Min deposit {selectedNetwork.minDeposit}. Deposits are automatically swapped and delivered directly to your Solana wallet.
-            </span>
-          </div>
         </div>
       )}
     </div>
   );
 }
+
+export default AuroraDeposit;
