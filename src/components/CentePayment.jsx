@@ -36,6 +36,7 @@ export function CentePayment({
   allowedRedirectHosts,
   network = config.defaultNetwork || 'Solana',
   moonpaySandbox = config.moonpaySandbox ?? false,
+  auroraApiKey = config.aurora?.apiKey,
   minAmount,
   maxAmount,
   toasts = true,
@@ -80,6 +81,7 @@ export function CentePayment({
         redirectUrl={safeRedirect}
         allowedRedirectHosts={allowedRedirectHosts}
         network={network}
+        auroraApiKey={auroraApiKey}
         {...(minAmount !== undefined ? { minAmount } : {})}
         {...(maxAmount !== undefined ? { maxAmount } : {})}
         debug={debug}

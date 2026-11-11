@@ -11,11 +11,14 @@ import {
   RefreshCw,
   Sparkles,
   Copy,
+  CreditCard,
+  Zap,
 } from 'lucide-react';
 import { config, theme, paymentMethods } from '../config';
 import { getSolanaWalletAddress, getEvmWalletAddress } from '../lib/wallet-utils';
 import { safeRedirectUrl, DEFAULT_REDIRECT } from '../lib/safe-redirect';
 import { triggerAutoBridgeNow } from './wallet/AutoBridgeRunner';
+import { AuroraDeposit } from './AuroraDeposit';
 
 export { getSolanaWalletAddress };
 
@@ -165,6 +168,7 @@ export function CenteFiatOnramp({
   redirectUrl = DEFAULT_REDIRECT,
   allowedRedirectHosts,
   network = 'Solana',
+  auroraApiKey = config.aurora?.apiKey,
   minAmount = config.minAmount ?? 1,
   maxAmount = config.maxAmount,
   debug = false,
@@ -184,7 +188,8 @@ export function CenteFiatOnramp({
   const safeRedirect = safeRedirectUrl(redirectUrl, allowedRedirectHosts);
 
   const [amount, setAmount] = useState(String(defaultAmount || config.defaultAmount || ''));
-  const [selectedToken, setSelectedToken] = useState(defaultToken || 'USDC');
+  const [selectedToken] = useState('USDC'); // Exclusively USDC as requested
+  const [depositMode, setDepositMode] = useState('fiat'); // 'fiat' | 'aurora'
   const [selectedMethod, setSelectedMethod] = useState('meld');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -837,46 +842,119 @@ export function CenteFiatOnramp({
             </div>
           )}
 
-          {/* Token selector */}
-          <div className="mb-4">
-            <label
-              className="block mb-2"
-              style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary }}
+          {/* Deposit Mode Selector */}
+          <div className="grid grid-cols-2 gap-2 p-1 bg-[#0b0e14] border border-slate-800/80 rounded-2xl mb-5">
+            <button
+              type="button"
+              onClick={() => setDepositMode('fiat')}
+              className="py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              style={
+                depositMode === 'fiat'
+                  ? { background: goldGradient, color: '#0b0e14', border: 'none', boxShadow: '0 4px 12px rgba(184, 134, 11, 0.2)' }
+                  : { background: 'transparent', color: theme.textSecondary, border: 'none' }
+              }
             >
-              Select Token on {networkLabel}
-            </label>
-            <div className="grid grid-cols-2 gap-2 bg-[#0b0e14] border border-slate-800/80 rounded-2xl p-1" role="radiogroup" aria-label="Token">
-              {['USDC', 'USDT'].map((tok) => {
-                const isActive = selectedToken === tok;
-                return (
-                  <button
-                    key={tok}
-                    type="button"
-                    role="radio"
-                    aria-checked={isActive}
-                    onClick={() => setSelectedToken(tok)}
-                    className="py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                    style={
-                      isActive
-                        ? { background: goldGradient, color: '#0b0e14', border: 'none' }
-                        : { background: 'transparent', color: '#94a3b8', border: 'none' }
-                    }
-                  >
-                    <span>{tok}</span>
-                    <span
-                      className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold"
-                      style={{
-                        backgroundColor: isActive ? 'rgba(0,0,0,0.2)' : '#1e293b',
-                        color: isActive ? '#0b0e14' : '#64748b',
-                      }}
-                    >
-                      SPL
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+              <CreditCard size={14} />
+              <span>Buy with Card</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDepositMode('aurora')}
+              className="py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              style={
+                depositMode === 'aurora'
+                  ? { background: goldGradient, color: '#0b0e14', border: 'none', boxShadow: '0 4px 12px rgba(184, 134, 11, 0.2)' }
+                  : { background: 'transparent', color: theme.textSecondary, border: 'none' }
+              }
+            >
+              <Zap size={14} />
+              <span>Deposit Crypto</span>
+            </button>
           </div>
+
+          {depositMode === 'aurora' ? (
+            authenticated && activeSolWallet ? (
+              <AuroraDeposit
+                solanaAddress={activeSolWallet}
+                apiKey={auroraApiKey}
+                onBack={() => setDepositMode('fiat')}
+              />
+            ) : (
+              <div
+                className="p-6 rounded-2xl text-center space-y-4"
+                style={{
+                  background: theme.inputBg,
+                  border: `1px solid ${theme.goldBorder}`,
+                }}
+              >
+                <div
+                  className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center"
+                  style={{
+                    background: 'rgba(218, 165, 32, 0.15)',
+                    border: `1px solid ${theme.goldBorder}`,
+                    color: theme.goldAccent,
+                  }}
+                >
+                  <Zap size={24} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white mb-1">
+                    Deposit USDT & Crypto via Aurora Intent
+                  </h3>
+                  <p className="text-xs" style={{ color: theme.textSecondary }}>
+                    Sign in with your email to reveal your dedicated deposit address. Deposits auto-convert and deliver directly to your Solana wallet.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setView('enter-email')}
+                  style={goldButtonStyle(false)}
+                >
+                  <Mail size={16} />
+                  <span>Sign in with Email</span>
+                </button>
+              </div>
+            )
+          ) : (
+            <>
+              {/* Token indicator - Restricted strictly to USDC */}
+              <div className="mb-4">
+                <label
+                  className="block mb-2"
+                  style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary }}
+                >
+                  Settlement Token on {networkLabel}
+                </label>
+                <div
+                  className="flex items-center justify-between p-2.5 px-3 rounded-2xl bg-[#0b0e14] border border-[#daa520]/25"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div
+                      className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs"
+                      style={{ background: 'rgba(39, 117, 202, 0.2)', color: '#60a5fa', border: '1px solid rgba(96, 165, 250, 0.4)' }}
+                    >
+                      $
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <span>USDC</span>
+                        <span
+                          className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold"
+                          style={{ backgroundColor: 'rgba(218, 165, 32, 0.15)', color: theme.goldAccent }}
+                        >
+                          SPL
+                        </span>
+                      </div>
+                      <div className="text-[10px]" style={{ color: theme.textSecondary }}>
+                        USD Coin (Solana Mainnet)
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] font-bold text-emerald-400">Direct Delivery</span>
+                  </div>
+                </div>
+              </div>
 
           {/* Amount */}
           <div style={{ marginBottom: '22px' }}>
@@ -1080,6 +1158,8 @@ export function CenteFiatOnramp({
               </>
             )}
           </button>
+            </>
+          )}
         </div>
       )}
     </div>

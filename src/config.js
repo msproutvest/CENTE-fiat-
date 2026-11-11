@@ -7,7 +7,7 @@ export const config = {
   defaultNetwork: 'Solana',
   defaultCurrency: 'USD',
   
-  // Solana SPL Stablecoin Mint Addresses (Mainnet)
+  // Solana SPL Stablecoin Mint Addresses (Mainnet) - Restricted to USDC
   solanaTokens: {
     USDC: {
       symbol: 'USDC',
@@ -16,13 +16,39 @@ export const config = {
       decimals: 6,
       chain: 'solana:mainnet',
     },
-    USDT: {
-      symbol: 'USDT',
-      name: 'Tether USD',
-      mintAddress: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-      decimals: 6,
-      chain: 'solana:mainnet',
-    },
+  },
+
+  // Aurora Intent Cross-Chain Deposit Configuration
+  aurora: {
+    apiUrl: 'https://intents-api.aurora.dev',
+    apiKey: import.meta.env.VITE_AURORA_INTENTS_API_KEY || '',
+    networks: [
+      {
+        id: 'usdt-tron',
+        symbol: 'USDT',
+        networkName: 'TRON (TRC20)',
+        depositChain: 'tron',
+        protocol: 'TRC-20',
+        badge: 'Lowest Fee',
+        minDeposit: '$2',
+        minDepositUsd: 2,
+        estimatedArrival: '~1 min',
+        destinationAsset: 'nep141:sol.omft.near',
+        contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
+      },
+      {
+        id: 'btc-native',
+        symbol: 'BTC',
+        networkName: 'Bitcoin (Native)',
+        depositChain: 'btc',
+        protocol: 'Native SegWit',
+        badge: 'Direct',
+        minDeposit: '$1',
+        minDepositUsd: 1,
+        estimatedArrival: '~10-20 min',
+        destinationAsset: 'nep141:sol.omft.near',
+      },
+    ],
   },
 
   logoUrl: 'https://app.gocente.com/assets/images/logo-latest-light.png',
