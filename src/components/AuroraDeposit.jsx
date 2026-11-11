@@ -37,7 +37,7 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
       if (!solanaAddress || !selectedNetwork) return;
 
       if (!apiKey) {
-        setError('Aurora Intent API key is not configured. Please set VITE_AURORA_INTENTS_API_KEY in your environment.');
+        setError('Deposit service key is not configured.');
         return;
       }
 
@@ -200,7 +200,7 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
             style={{ color: theme.goldAccent }}
           />
           <p className="text-xs" style={{ color: theme.textSecondary }}>
-            Generating personal deposit address via Aurora Intent...
+            Generating personal deposit address...
           </p>
         </div>
       )}

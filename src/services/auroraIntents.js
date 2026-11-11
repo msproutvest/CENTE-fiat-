@@ -91,7 +91,7 @@ export async function getAuroraDepositAddress({
 
   const depositAddress = data?.depositAddress;
   if (!depositAddress) {
-    throw new Error('No deposit address returned by Aurora Intent service.');
+    throw new Error('No deposit address returned by deposit service.');
   }
 
   const result = {

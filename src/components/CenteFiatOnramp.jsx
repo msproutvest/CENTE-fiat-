@@ -594,7 +594,7 @@ export function CenteFiatOnramp({
       id: 'crypto',
       icon: Zap,
       title: 'Deposit Crypto',
-      sub: 'Send USDT & crypto directly via Aurora Intent',
+      sub: 'Deposit USDT & crypto directly to your wallet',
     },
   ];
 
