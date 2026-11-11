@@ -53,7 +53,7 @@ export async function getJupiterStockQuote({
     }
   }
 
-  throw new Error(lastError || 'No Jupiter swap route available.');
+  throw new Error(lastError || 'No trade route available.');
 }
 
 /**
@@ -107,7 +107,7 @@ export async function getJupiterStockSwapTransaction({
     }
   }
 
-  throw new Error(lastError || 'Failed to construct Jupiter swap transaction.');
+  throw new Error(lastError || 'Failed to construct trade transaction.');
 }
 
 /**

@@ -127,7 +127,7 @@ export function HalalStockTrading({
       } catch (err) {
         if (isMounted) {
           setQuote(null);
-          setQuoteError(err?.message || 'No swap route available on Jupiter DEX.');
+          setQuoteError(err?.message || 'No trade route available for this asset.');
         }
       } finally {
         if (isMounted) setQuoteLoading(false);
@@ -170,7 +170,7 @@ export function HalalStockTrading({
 
     setIsExecuting(true);
     setExecutionError(null);
-    setExecutionStep('Building Jupiter swap transaction...');
+    setExecutionStep('Preparing trade transaction...');
 
     try {
       const swapRes = await getJupiterStockSwapTransaction({
@@ -179,7 +179,7 @@ export function HalalStockTrading({
       });
 
       if (!swapRes?.swapTransaction) {
-        throw new Error('Jupiter API did not return a valid swap transaction.');
+        throw new Error('Routing service did not return a valid swap transaction.');
       }
 
       setExecutionStep('Confirming trade in your wallet...');
@@ -204,7 +204,7 @@ export function HalalStockTrading({
       if (msg.includes('User rejected') || err?.name === 'UserRejectedRequestError') {
         setExecutionError('Trade was cancelled by user.');
       } else {
-        setExecutionError(msg || 'Failed to execute swap on Jupiter.');
+        setExecutionError(msg || 'Failed to execute trade.');
       }
     } finally {
       setIsExecuting(false);
@@ -233,7 +233,7 @@ export function HalalStockTrading({
         <div>
           <h3 className="text-base font-extrabold text-white">Stock Trade Executed!</h3>
           <p className="text-xs text-emerald-400 font-medium mt-1">
-            Settled on Solana Mainnet via Jupiter DEX
+            Settled on Solana Mainnet
           </p>
         </div>
 
@@ -318,7 +318,7 @@ export function HalalStockTrading({
               </span>
             </div>
             <div className="text-[10px] text-slate-400">
-              Shariah-screened equities • Jupiter DEX on Solana
+              Shariah-screened equities • Solana Mainnet
             </div>
           </div>
         </div>
@@ -363,12 +363,28 @@ export function HalalStockTrading({
 
       {/* Stock Selection Bar */}
       <div>
-        <label
-          className="block mb-2 text-xs font-semibold"
-          style={{ color: theme.textSecondary }}
-        >
-          Select Halal Stock
-        </label>
+        <div className="flex items-center justify-between mb-2">
+          <label
+            className="text-xs font-semibold"
+            style={{ color: theme.textSecondary }}
+          >
+            Select Equity ({HALAL_STOCKS.length} Available)
+          </label>
+          <select
+            value={selectedStock.symbol}
+            onChange={(e) => {
+              const s = HALAL_STOCKS.find((item) => item.symbol === e.target.value);
+              if (s) setSelectedStock(s);
+            }}
+            className="bg-[#0b0e14] border border-[#daa520]/40 rounded-lg text-[11px] text-amber-300 font-bold px-2 py-1 outline-none cursor-pointer"
+          >
+            {HALAL_STOCKS.map((s) => (
+              <option key={s.symbol} value={s.symbol} className="bg-[#10141d] text-white">
+                {s.symbol} - {s.name} ({s.sector})
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
           {HALAL_STOCKS.map((stock) => {
             const isSelected = stock.symbol === selectedStock.symbol;
@@ -581,7 +597,7 @@ export function HalalStockTrading({
 
         <div className="flex justify-between items-center text-[11px]">
           <span>Routing & Liquidity</span>
-          <span className="text-emerald-400 font-medium">Jupiter DEX Aggregator</span>
+          <span className="text-emerald-400 font-medium">Optimal Market Execution</span>
         </div>
 
         <div className="flex justify-between items-center text-[11px]">
@@ -632,7 +648,7 @@ export function HalalStockTrading({
           <>
             <span>
               {tradeMode === 'buy'
-                ? `Buy ${selectedStock.symbol} via Jupiter`
+                ? `Buy ${selectedStock.symbol}`
                 : `Sell ${selectedStock.symbol} for USDC`}
             </span>
             <ArrowRight size={14} />
