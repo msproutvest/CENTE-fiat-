@@ -13,12 +13,14 @@ import {
   Copy,
   CreditCard,
   Zap,
+  TrendingUp,
 } from 'lucide-react';
 import { config, theme, paymentMethods } from '../config';
 import { getSolanaWalletAddress, getEvmWalletAddress } from '../lib/wallet-utils';
 import { safeRedirectUrl, DEFAULT_REDIRECT } from '../lib/safe-redirect';
 import { triggerAutoBridgeNow } from './wallet/AutoBridgeRunner';
 import { AuroraDeposit } from './AuroraDeposit';
+import { HalalStockTrading } from './HalalStockTrading';
 
 export { getSolanaWalletAddress };
 
@@ -169,6 +171,8 @@ export function CenteFiatOnramp({
   allowedRedirectHosts,
   network = 'Solana',
   auroraApiKey = config.aurora?.apiKey,
+  brand = 'halalvest',
+  initialTab,
   minAmount = config.minAmount ?? 1,
   maxAmount = config.maxAmount,
   debug = false,
@@ -189,7 +193,7 @@ export function CenteFiatOnramp({
 
   const [amount, setAmount] = useState(String(defaultAmount || config.defaultAmount || ''));
   const [selectedToken] = useState('USDC'); // Exclusively USDC as requested
-  const [depositMode, setDepositMode] = useState('fiat'); // 'fiat' | 'aurora'
+  const [depositMode, setDepositMode] = useState(initialTab || (brand === 'halalvest' ? 'stocks' : 'fiat')); // 'stocks' | 'fiat' | 'aurora'
   const [selectedMethod, setSelectedMethod] = useState('meld');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -206,6 +210,12 @@ export function CenteFiatOnramp({
   const activeSolWallet = getSolanaWalletAddress(user, [], privyWallets);
   const activeEvmWallet = getEvmWalletAddress(user, privyWallets);
   const destinationAddress = isSolana ? activeSolWallet : activeEvmWallet;
+  const solWalletObj =
+    privyWallets?.find(
+      (w) =>
+        w?.chainType === 'solana' ||
+        (w?.address && !w.address.startsWith('0x') && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.address))
+    ) || privyWallets?.[0];
 
   // Always-current wallet address, so async flows can wait for wallet creation.
   const walletRef = useRef(null);
@@ -749,7 +759,23 @@ export function CenteFiatOnramp({
         /* 4. MAIN FORM VIEW */
         <div style={cardStyle}>
           <div className="text-center" style={{ marginBottom: '20px' }}>
-            <img src={config.logoUrl} alt="Cente" style={{ height: '38px', width: 'auto', display: 'inline-block' }} />
+            {brand === 'halalvest' ? (
+              <div className="flex flex-col items-center justify-center">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-black text-sm">
+                    HV
+                  </div>
+                  <span className="text-lg font-black tracking-tight text-white">
+                    HALAL<span className="text-emerald-400">VEST</span>
+                  </span>
+                </div>
+                <span className="text-[10px] font-semibold tracking-wider text-slate-400 uppercase mt-0.5">
+                  Shariah Stock Trading & Wealth
+                </span>
+              </div>
+            ) : (
+              <img src={config.logoUrl} alt="Cente" style={{ height: '38px', width: 'auto', display: 'inline-block' }} />
+            )}
           </div>
 
           {authenticated && destinationAddress ? (
@@ -842,37 +868,58 @@ export function CenteFiatOnramp({
             </div>
           )}
 
-          {/* Deposit Mode Selector */}
-          <div className="grid grid-cols-2 gap-2 p-1 bg-[#0b0e14] border border-slate-800/80 rounded-2xl mb-5">
+          {/* Mode Selector Tabs: Stocks, Card, Crypto */}
+          <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#0b0e14] border border-slate-800/80 rounded-2xl mb-5">
+            <button
+              type="button"
+              onClick={() => setDepositMode('stocks')}
+              className="py-2 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              style={
+                depositMode === 'stocks'
+                  ? { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#ffffff', border: 'none', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)' }
+                  : { background: 'transparent', color: theme.textSecondary, border: 'none' }
+              }
+            >
+              <TrendingUp size={13} />
+              <span>Stocks</span>
+            </button>
             <button
               type="button"
               onClick={() => setDepositMode('fiat')}
-              className="py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              className="py-2 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
               style={
                 depositMode === 'fiat'
                   ? { background: goldGradient, color: '#0b0e14', border: 'none', boxShadow: '0 4px 12px rgba(184, 134, 11, 0.2)' }
                   : { background: 'transparent', color: theme.textSecondary, border: 'none' }
               }
             >
-              <CreditCard size={14} />
-              <span>Buy with Card</span>
+              <CreditCard size={13} />
+              <span>Card</span>
             </button>
             <button
               type="button"
               onClick={() => setDepositMode('aurora')}
-              className="py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              className="py-2 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
               style={
                 depositMode === 'aurora'
                   ? { background: goldGradient, color: '#0b0e14', border: 'none', boxShadow: '0 4px 12px rgba(184, 134, 11, 0.2)' }
                   : { background: 'transparent', color: theme.textSecondary, border: 'none' }
               }
             >
-              <Zap size={14} />
-              <span>Deposit Crypto</span>
+              <Zap size={13} />
+              <span>Crypto</span>
             </button>
           </div>
 
-          {depositMode === 'aurora' ? (
+          {depositMode === 'stocks' ? (
+            <HalalStockTrading
+              solanaAddress={activeSolWallet}
+              solWallet={solWalletObj}
+              authenticated={authenticated}
+              onRequireLogin={() => setView('enter-email')}
+              onSwitchToDeposit={() => setDepositMode('fiat')}
+            />
+          ) : depositMode === 'aurora' ? (
             authenticated && activeSolWallet ? (
               <AuroraDeposit
                 solanaAddress={activeSolWallet}

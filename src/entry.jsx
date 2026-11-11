@@ -19,6 +19,9 @@ function parseDataset(el) {
       : undefined,
     network: ds.network,
     moonpaySandbox: ds.moonpaySandbox !== undefined ? ds.moonpaySandbox === 'true' : undefined,
+    auroraApiKey: ds.auroraApiKey,
+    brand: ds.brand || (el.hasAttribute('data-halalvest-widget') || el.hasAttribute('data-halalvest-payment') ? 'halalvest' : 'halalvest'),
+    initialTab: ds.initialTab || ds.defaultTab || undefined,
     minAmount: ds.minAmount ? Number(ds.minAmount) : undefined,
     maxAmount: ds.maxAmount ? Number(ds.maxAmount) : undefined,
     debug: ds.debug === 'true',
@@ -78,7 +81,9 @@ export function unmount(target) {
 
 export function autoMount() {
   if (typeof document === 'undefined') return;
-  const elements = document.querySelectorAll('[data-cente-payment]');
+  const elements = document.querySelectorAll(
+    '[data-cente-payment], [data-halalvest-widget], [data-halalvest-payment], [data-halalvest-stocks]'
+  );
   elements.forEach((el) => {
     if (!activeRoots.has(el)) {
       const props = parseDataset(el);
@@ -94,6 +99,7 @@ if (typeof window !== 'undefined') {
     autoMount,
     Component: CentePayment,
   };
+  window.HalalvestWidget = window.CentePayment;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', autoMount);
