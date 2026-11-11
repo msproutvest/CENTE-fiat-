@@ -2,57 +2,44 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as PrivyAuth from '@privy-io/react-auth';
 import {
   ArrowLeft,
-  ArrowRight,
   Check,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   Mail,
   LogOut,
   RefreshCw,
-  Sparkles,
   Copy,
   CreditCard,
   Zap,
   TrendingUp,
+  Loader2,
+  BadgeCheck,
 } from 'lucide-react';
 import { config, theme, paymentMethods } from '../config';
 import { getSolanaWalletAddress, getEvmWalletAddress } from '../lib/wallet-utils';
 import { safeRedirectUrl, DEFAULT_REDIRECT } from '../lib/safe-redirect';
-import { triggerAutoBridgeNow } from './wallet/AutoBridgeRunner';
 import { AuroraDeposit } from './AuroraDeposit';
 import { HalalStockTrading } from './HalalStockTrading';
 
 export { getSolanaWalletAddress };
 
 const { usePrivy, useFundWallet, useLoginWithEmail, useWallets } = PrivyAuth;
-// Older SDK versions don't ship useAddFunds; an undefined hook would crash at render.
 const useAddFunds = PrivyAuth.useAddFunds || (() => ({ addFunds: undefined }));
 
-/**
- * Validates that a transaction or provider reference is genuine.
- * Rejects placeholder status strings (e.g. "Confirmed", "Pending confirmation").
- */
+/* ------------------------------------------------------------------ */
+/*  Utilities                                                          */
+/* ------------------------------------------------------------------ */
+
 export const isValidTxRef = (ref) => {
   if (!ref || typeof ref !== 'string') return false;
   const s = ref.trim().toLowerCase();
   const placeholders = [
-    'confirmed',
-    'pending confirmation',
-    'pending',
-    'submitted',
-    'success',
-    'completed',
-    'cancelled',
-    'canceled',
-    'failed',
-    'null',
-    'undefined',
-    'true',
-    'false',
-    '[object object]',
+    'confirmed', 'pending confirmation', 'pending', 'submitted', 'success',
+    'completed', 'cancelled', 'canceled', 'failed', 'null', 'undefined',
+    'true', 'false', '[object object]',
   ];
   if (placeholders.includes(s)) return false;
-  // Must look like an on-chain hash or provider reference id (at least 8 chars, alphanumeric/symbols)
   return s.length >= 8 && /^[a-zA-Z0-9_\-:]+$/.test(ref.trim());
 };
 
@@ -64,103 +51,207 @@ export const isCancelMessage = (err) => {
   }
   const msg = String(err?.message || err?.reason || err || '').toLowerCase();
   return (
-    msg.includes('user') ||
-    msg.includes('cancel') ||
-    msg.includes('close') ||
-    msg.includes('exit') ||
-    msg.includes('reject') ||
-    msg.includes('abort') ||
-    msg.includes('denied') ||
-    msg.includes('dismiss') ||
-    msg.includes('abandon') ||
-    msg.includes('window closed') ||
-    msg.includes('popup closed')
+    msg.includes('user') || msg.includes('cancel') || msg.includes('close') ||
+    msg.includes('exit') || msg.includes('reject') || msg.includes('abort') ||
+    msg.includes('denied') || msg.includes('dismiss') || msg.includes('abandon') ||
+    msg.includes('window closed') || msg.includes('popup closed')
   );
 };
 
-const cardStyle = {
-  backgroundColor: theme.cardBg,
-  border: `1px solid ${theme.goldBorder}`,
-  borderRadius: '24px',
-  padding: '30px 26px',
-  boxShadow: '0 10px 40px -10px rgba(212, 175, 55, 0.12)',
-  boxSizing: 'border-box',
+const shortAddr = (a, n = 4) => (a ? `${a.slice(0, n)}…${a.slice(-n)}` : '');
+
+// Maps the legacy `initialTab` prop onto the new pages.
+const TAB_TO_PAGE = { stocks: 'stocks', fiat: 'deposit', aurora: 'crypto' };
+
+/* ------------------------------------------------------------------ */
+/*  Styles - HalalVest Emerald Green Theme                            */
+/* ------------------------------------------------------------------ */
+
+const rootVars = {
+  '--co-bg': '#09100d',
+  '--co-border': 'rgba(16, 185, 129, 0.25)',
+  '--co-green': '#10b981',
+  '--co-green-dark': '#059669',
+  '--co-green-light': '#34d399',
+  '--co-text': theme.textPrimary || '#f8fafc',
+  '--co-sub': '#94a3b8',
+  '--co-mute': '#64748b',
+  '--co-font': theme.fontFamily,
+  '--co-display': "'Fraunces', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif",
+  '--co-line': 'rgba(16, 185, 129, 0.14)',
+  '--co-ok': '#10b981',
+  '--co-field': 'rgba(6, 12, 10, 0.8)',
 };
 
-const goldGradient = `linear-gradient(135deg, ${theme.goldPrimary} 0%, ${theme.goldSecondary} 50%, ${theme.goldAccent} 100%)`;
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&display=swap');
 
-function goldButtonStyle(disabled) {
-  return {
-    width: '100%',
-    padding: '14px 20px',
-    background: goldGradient,
-    color: '#0b0e14',
-    fontWeight: 800,
-    fontSize: '14px',
-    borderRadius: '16px',
-    border: 'none',
-    boxShadow: '0 8px 24px -4px rgba(184, 134, 11, 0.35)',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.6 : 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '8px',
-    fontFamily: theme.fontFamily,
-    touchAction: 'manipulation',
-  };
+.co-root { width: 100%; max-width: 420px; margin: 0 auto; font-family: var(--co-font); color: var(--co-text); touch-action: manipulation; -webkit-text-size-adjust: 100%; }
+.co-root *, .co-root *::before, .co-root *::after { box-sizing: border-box; }
+.co-root button, .co-root input { font-family: inherit; }
+.co-root button:focus-visible, .co-root a:focus-visible { outline: 2px solid var(--co-green); outline-offset: 2px; }
+
+.co-card { position: relative; background: var(--co-bg); border: 1px solid var(--co-border); border-radius: 20px; padding: 22px; box-shadow: 0 28px 48px -32px rgba(0, 0, 0, 0.8); }
+
+/* header */
+.co-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; min-height: 34px; }
+.co-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.co-mark { width: 32px; height: 32px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: var(--co-green-light); font-weight: 800; font-size: 12px; }
+.co-brand-name { font-family: var(--co-display); font-size: 19px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.1; color: #ffffff; }
+.co-brand-sub { font-size: 11px; color: var(--co-mute); margin-top: 2px; }
+.co-head-end { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.co-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px; border: 1px solid var(--co-line); background: transparent; color: var(--co-sub); font-size: 12px; font-weight: 600; }
+.co-chip-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; letter-spacing: 0.01em; }
+.co-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--co-ok); flex-shrink: 0; }
+.co-icon-btn { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; border: 1px solid var(--co-line); background: transparent; color: var(--co-sub); cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+.co-icon-btn:hover { color: var(--co-text); border-color: rgba(16, 185, 129, 0.35); }
+
+/* home navigation */
+.co-nav { border-top: 1px solid var(--co-line); }
+.co-nav-item { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px 0; border: none; border-bottom: 1px solid var(--co-line); background: none; color: inherit; text-align: left; cursor: pointer; }
+.co-nav-icon { width: 42px; height: 42px; flex-shrink: 0; display: grid; place-items: center; border-radius: 12px; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.28); color: var(--co-green); }
+.co-nav-icon-stocks { background: rgba(16, 185, 129, 0.18); border-color: rgba(16, 185, 129, 0.4); color: var(--co-green-light); }
+.co-nav-body { flex: 1; min-width: 0; }
+.co-nav-title { display: block; font-size: 15px; font-weight: 700; color: #ffffff; }
+.co-nav-sub { display: block; margin-top: 2px; font-size: 12px; color: var(--co-mute); line-height: 1.4; }
+.co-nav-chev { color: var(--co-mute); flex-shrink: 0; transition: transform 0.15s, color 0.15s; }
+.co-nav-item:hover .co-nav-chev { color: var(--co-green-light); transform: translateX(2px); }
+
+/* amount */
+.co-label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--co-sub); }
+.co-amount { display: flex; align-items: baseline; gap: 6px; padding: 2px 0 12px; border-bottom: 1px solid var(--co-line); transition: border-color 0.15s, box-shadow 0.15s; }
+.co-amount:focus-within { border-bottom-color: var(--co-green); box-shadow: 0 1px 0 var(--co-green); }
+.co-amount-sign { font-family: var(--co-display); font-size: 34px; color: var(--co-mute); line-height: 1; }
+.co-amount-input { flex: 1; min-width: 0; padding: 0; border: none; outline: none; background: transparent; color: var(--co-text); font-family: var(--co-display); font-size: 54px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.co-amount-input::placeholder { color: rgba(148, 163, 184, 0.3); }
+.co-amount-unit { font-size: 13px; font-weight: 700; color: var(--co-green-light); }
+
+.co-presets { display: flex; gap: 8px; margin-top: 14px; }
+.co-preset { flex: 1; padding: 8px 0; border-radius: 999px; border: 1px solid var(--co-line); background: transparent; color: var(--co-sub); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+.co-preset:hover { border-color: rgba(16, 185, 129, 0.4); color: var(--co-text); }
+.co-preset[aria-pressed="true"] { border-color: var(--co-green); color: var(--co-green-light); background: rgba(16, 185, 129, 0.14); }
+
+.co-summary { margin: 20px 0 24px; display: grid; gap: 9px; font-size: 13px; color: var(--co-sub); }
+.co-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.co-row-value { color: var(--co-text); font-weight: 600; text-align: right; }
+
+/* payment methods */
+.co-methods { margin: 0 0 22px; border-top: 1px solid var(--co-line); }
+.co-method { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 0; border: none; border-bottom: 1px solid var(--co-line); background: none; color: inherit; text-align: left; cursor: pointer; }
+.co-method-icon { width: 36px; height: 36px; flex-shrink: 0; display: grid; place-items: center; border-radius: 10px; background: rgba(16, 185, 129, 0.08); color: var(--co-sub); transition: all 0.15s; }
+.co-method[aria-checked="true"] .co-method-icon { background: rgba(16, 185, 129, 0.18); color: var(--co-green-light); }
+.co-method-body { flex: 1; min-width: 0; }
+.co-method-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; color: #ffffff; }
+.co-method-tag { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--co-line); font-size: 11px; font-weight: 600; color: var(--co-sub); }
+.co-method[aria-checked="true"] .co-method-tag { border-color: rgba(16, 185, 129, 0.4); color: var(--co-green-light); }
+.co-method-sub { margin: 2px 0 0; font-size: 12px; color: var(--co-mute); line-height: 1.4; }
+.co-radio { width: 18px; height: 18px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid rgba(148, 163, 184, 0.4); color: #09100d; transition: all 0.15s; }
+.co-method[aria-checked="true"] .co-radio { background: var(--co-green); border-color: var(--co-green); }
+
+.co-order { margin: 0 0 20px; padding: 14px 0; border-top: 1px solid var(--co-line); border-bottom: 1px solid var(--co-line); }
+.co-order-amount { font-family: var(--co-display); font-size: 32px; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; color: #ffffff; }
+.co-order-amount small { margin-left: 6px; font-family: var(--co-font); font-size: 14px; font-weight: 700; color: var(--co-green-light); letter-spacing: 0; }
+.co-order-sub { margin-top: 4px; font-size: 12px; color: var(--co-mute); }
+
+/* buttons */
+.co-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 15px 18px; border-radius: 12px; border: none; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; font-size: 15px; font-weight: 700; cursor: pointer; transition: filter 0.15s; box-shadow: 0 4px 14px -2px rgba(16, 185, 129, 0.4); }
+.co-btn:hover:not(:disabled) { filter: brightness(1.1); }
+.co-btn:disabled { background: rgba(148, 163, 184, 0.14); color: rgba(148, 163, 184, 0.7); cursor: not-allowed; box-shadow: none; }
+.co-btn-ghost { width: 100%; display: flex; align-items: center; justify-content: center; padding: 14px 18px; border-radius: 12px; border: 1px solid var(--co-line); background: transparent; color: var(--co-text); font-size: 14px; font-weight: 600; text-decoration: none; cursor: pointer; transition: border-color 0.15s; }
+.co-btn-ghost:hover { border-color: rgba(16, 185, 129, 0.4); }
+.co-back { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 0; border: none; background: none; color: var(--co-sub); font-size: 13px; font-weight: 600; cursor: pointer; }
+.co-back:hover { color: var(--co-green-light); }
+
+.co-error { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 16px; padding: 11px 13px; border-radius: 12px; border: 1px solid rgba(245, 158, 11, 0.28); background: rgba(245, 158, 11, 0.08); color: #fcd34d; font-size: 13px; line-height: 1.45; }
+.co-error svg { flex-shrink: 0; margin-top: 1px; }
+
+/* titles + auth */
+.co-title { margin: 0 0 8px; font-family: var(--co-display); font-size: 27px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.15; color: #ffffff; }
+.co-lede { margin: 0 0 24px; font-size: 14px; line-height: 1.55; color: var(--co-sub); }
+.co-input-label { display: block; margin-bottom: 8px; font-size: 13px; color: var(--co-sub); }
+.co-input { width: 100%; padding: 14px; margin-bottom: 18px; border-radius: 12px; border: 1px solid var(--co-line); background: var(--co-field); color: var(--co-text); font-size: 16px; outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
+.co-input:focus { border-color: var(--co-green); box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
+.co-otp { position: relative; display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 18px; }
+.co-otp-cell { height: 58px; display: grid; place-items: center; border-radius: 12px; border: 1px solid var(--co-line); background: var(--co-field); font-family: var(--co-display); font-size: 27px; font-weight: 500; font-variant-numeric: tabular-nums; transition: border-color 0.15s, box-shadow 0.15s; color: #ffffff; }
+.co-otp-cell[data-active="true"] { border-color: var(--co-green); box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
+.co-otp-input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: none; background: transparent; font-size: 16px; cursor: text; }
+.co-resend { display: block; margin: 14px auto 0; padding: 6px; border: none; background: none; color: var(--co-green); font-size: 13px; font-weight: 600; cursor: pointer; }
+.co-resend:disabled { color: var(--co-mute); cursor: not-allowed; }
+
+/* receipt */
+.co-check { width: 56px; height: 56px; display: grid; place-items: center; margin-bottom: 18px; border-radius: 50%; border: 1px solid rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.15); color: var(--co-green-light); animation: co-pop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.25) both; }
+.co-receipt-amount { margin: 14px 0 6px; font-family: var(--co-display); font-size: 42px; font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; color: #ffffff; }
+.co-receipt-amount small { font-size: 16px; font-weight: 600; color: var(--co-green-light); letter-spacing: 0; margin-left: 6px; font-family: var(--co-font); }
+.co-dl { display: grid; gap: 10px; margin: 22px 0; padding: 16px 0; border-top: 1px dashed rgba(16, 185, 129, 0.25); border-bottom: 1px dashed rgba(16, 185, 129, 0.25); font-size: 13px; color: var(--co-sub); }
+.co-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 500; }
+.co-ref { word-break: break-all; color: var(--co-green-light); }
+.co-redirect { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 13px; color: var(--co-sub); }
+
+.co-spin { animation: co-spin 1s linear infinite; }
+@keyframes co-spin { to { transform: rotate(360deg); } }
+@keyframes co-pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+@media (max-width: 380px) {
+  .co-card { padding: 18px 16px; }
+  .co-amount-input { font-size: 46px; }
+  .co-otp-cell { height: 52px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .co-check { animation: none; }
+  .co-nav-chev { transition: none; }
+}
+`;
+
+/* ------------------------------------------------------------------ */
+/*  Small components                                                   */
+/* ------------------------------------------------------------------ */
+
+function Spinner({ size = 16 }) {
+  return <Loader2 size={size} className="co-spin" aria-hidden="true" />;
 }
 
 function ErrorBox({ message }) {
   if (!message) return null;
   return (
-    <div
-      role="alert"
-      className="flex items-start gap-2 mb-4"
-      style={{
-        backgroundColor: 'rgba(245, 158, 11, 0.1)',
-        border: '1px solid rgba(245, 158, 11, 0.2)',
-        borderRadius: '12px',
-        padding: '10px 12px',
-        color: '#fcd34d',
-        fontSize: '12px',
-      }}
-    >
-      <CircleAlert size={15} style={{ flexShrink: 0, marginTop: '2px' }} />
+    <div role="alert" className="co-error">
+      <CircleAlert size={16} aria-hidden="true" />
       <span>{message}</span>
     </div>
   );
 }
 
-function BackButton({ onClick }) {
+function BackButton({ onClick, label = 'Back' }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center gap-1.5 cursor-pointer"
-      style={{
-        background: 'transparent',
-        border: 'none',
-        color: theme.textSecondary,
-        fontSize: '12px',
-        marginBottom: '18px',
-        padding: 0,
-        fontFamily: theme.fontFamily,
-      }}
-    >
-      <ArrowLeft size={14} /> Back
+    <button type="button" className="co-back" onClick={onClick}>
+      <ArrowLeft size={14} aria-hidden="true" /> {label}
     </button>
   );
 }
 
-function Row({ label, children }) {
+function Line({ label, children }) {
   return (
-    <div className="flex justify-between" style={{ color: theme.textSecondary }}>
+    <div className="co-row">
       <span>{label}</span>
-      {children}
+      <span className="co-row-value">{children}</span>
     </div>
   );
 }
+
+function Brand() {
+  return (
+    <div className="co-brand">
+      <div className="co-mark" aria-hidden="true">HV</div>
+      <div>
+        <div className="co-brand-name">HalalVest</div>
+        <div className="co-brand-sub">Shariah stock trading & wealth</div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main component                                                     */
+/* ------------------------------------------------------------------ */
 
 export function CenteFiatOnramp({
   defaultAmount,
@@ -184,7 +275,7 @@ export function CenteFiatOnramp({
   const { sendCode, loginWithCode } = useLoginWithEmail();
 
   const log = (...args) => {
-    if (debug) console.log('[Cente]', ...args);
+    if (debug) console.log('[HalalVest]', ...args);
   };
 
   const isSolana = String(network || '').toLowerCase().includes('sol');
@@ -192,19 +283,19 @@ export function CenteFiatOnramp({
   const safeRedirect = safeRedirectUrl(redirectUrl, allowedRedirectHosts);
 
   const [amount, setAmount] = useState(String(defaultAmount || config.defaultAmount || ''));
-  const [selectedToken] = useState('USDC'); // Exclusively USDC as requested
-  const [depositMode, setDepositMode] = useState(initialTab || (brand === 'halalvest' ? 'stocks' : 'fiat')); // 'stocks' | 'fiat' | 'aurora'
-  const [selectedMethod, setSelectedMethod] = useState('meld');
+  const [selectedToken] = useState('USDC');
+  const [page, setPage] = useState(TAB_TO_PAGE[initialTab] || 'home');
+  const [depositStep, setDepositStep] = useState('amount');
+  const [selectedMethod, setSelectedMethod] = useState(paymentMethods[0]?.id || 'stripe');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isSuccess, setIsSuccess] = useState(false);
   const [paymentResult, setPaymentResult] = useState(null);
-  const [view, setView] = useState('form'); // 'form' | 'enter-email' | 'enter-code'
+  const [view, setView] = useState('form');
   const [email, setEmail] = useState(initialEmail || '');
   const [otpCode, setOtpCode] = useState('');
+  const [otpFocused, setOtpFocused] = useState(false);
   const [cooldown, setCooldown] = useState(0);
-  const [isCheckingBridge, setIsCheckingBridge] = useState(false);
-  const [copiedEvm, setCopiedEvm] = useState(false);
 
   const currency = 'USD';
   const activeSolWallet = getSolanaWalletAddress(user, [], privyWallets);
@@ -217,16 +308,13 @@ export function CenteFiatOnramp({
         (w?.address && !w.address.startsWith('0x') && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.address))
     ) || privyWallets?.[0];
 
-  // Always-current wallet address, so async flows can wait for wallet creation.
   const walletRef = useRef(null);
   walletRef.current = destinationAddress;
 
   const redirectTimer = useRef(null);
-  const bridgeTimer = useRef(null);
   useEffect(
     () => () => {
       clearTimeout(redirectTimer.current);
-      clearTimeout(bridgeTimer.current);
     },
     []
   );
@@ -245,13 +333,6 @@ export function CenteFiatOnramp({
       await new Promise((r) => setTimeout(r, 300));
     }
     return null;
-  };
-
-  const handleTriggerBridge = () => {
-    setIsCheckingBridge(true);
-    triggerAutoBridgeNow();
-    clearTimeout(bridgeTimer.current);
-    bridgeTimer.current = setTimeout(() => setIsCheckingBridge(false), 2500);
   };
 
   const handleAmountChange = (e) => {
@@ -278,11 +359,10 @@ export function CenteFiatOnramp({
 
       const providerHint = ['meld', 'moonpay', 'stripe', 'coinbase'].includes(String(method).toLowerCase())
         ? String(method).toLowerCase()
-        : 'meld';
+        : 'stripe';
 
-      log(`Initiating ${amountStr} ${tokenChoice} deposit via ${providerHint}`);
+      log(`Initiating ${amountStr} ${tokenChoice} deposit`);
 
-      // 1. Primary: addFunds
       if (typeof addFunds === 'function') {
         try {
           result = await addFunds({
@@ -305,14 +385,13 @@ export function CenteFiatOnramp({
         } catch (err) {
           if (isCancelMessage(err)) {
             cancelled = true;
-            log('addFunds cancelled or closed by user');
+            log('addFunds cancelled by user');
           } else {
-            console.warn('[Cente] addFunds error:', err?.message || err);
+            console.warn('[HalalVest] addFunds error:', err?.message || err);
           }
         }
       }
 
-      // 2. Fallback: only if addFunds is NOT a function and user did NOT cancel
       if (!result && !cancelled && typeof fundWallet === 'function' && typeof addFunds !== 'function') {
         try {
           result = await fundWallet({
@@ -327,15 +406,13 @@ export function CenteFiatOnramp({
         } catch (err) {
           if (isCancelMessage(err)) {
             cancelled = true;
-            log('fundWallet cancelled or closed by user');
+            log('fundWallet cancelled by user');
           } else {
-            console.warn('[Cente] fundWallet failed:', err?.message || err);
+            console.warn('[HalalVest] fundWallet failed:', err?.message || err);
             throw err;
           }
         }
       }
-
-      log('Funding result:', result);
 
       const status = String(result?.status || '').toLowerCase().trim();
       const rawTxRef =
@@ -350,13 +427,6 @@ export function CenteFiatOnramp({
         cancelled ||
         ['cancelled', 'canceled', 'failed', 'rejected', 'exited', 'closed', 'abandoned'].includes(status);
 
-      // Strict validation:
-      // 1. Must NOT be explicitly cancelled, closed, or failed.
-      // 2. Must have a non-null result.
-      // 3. For addFunds: status is 'confirmed' or 'submitted'.
-      // 4. For fundWallet (or any flow without explicit provider confirmation):
-      //    status 'completed' is ONLY accepted if an actual validTx is present,
-      //    preventing false success screens when closing/cancelling.
       const isConfirmedSuccess =
         !isExplicitFailOrCancel &&
         Boolean(result) &&
@@ -368,13 +438,13 @@ export function CenteFiatOnramp({
       if (isConfirmedSuccess) {
         succeeded = true;
         const details = {
-          hash: validTx, // Strictly null if no genuine hash or provider ref exists. NEVER a fake string!
+          hash: validTx,
           amount: amountNum,
           token: tokenChoice,
           network: networkLabel,
           mint: isSolana ? tokenMeta.mintAddress : null,
           recipient: targetAddress,
-          method: String(method).toUpperCase(),
+          method: 'CARD PAYMENT',
         };
         setIsSuccess(true);
         setPaymentResult(details);
@@ -384,7 +454,7 @@ export function CenteFiatOnramp({
           window.location.href = safeRedirect;
         }, 2500);
       } else {
-        log('Payment cancelled or unconfirmed by provider. Returning cleanly to form.');
+        log('Payment cancelled or unconfirmed. Returning cleanly.');
         setIsSuccess(false);
         setPaymentResult(null);
       }
@@ -397,7 +467,6 @@ export function CenteFiatOnramp({
     } finally {
       setIsLoading(false);
       setView('form');
-      if (succeeded) triggerAutoBridgeNow();
     }
   };
 
@@ -409,21 +478,29 @@ export function CenteFiatOnramp({
     return null;
   };
 
-  const handleStartPayment = async () => {
-    setError(null);
-
+  const handleContinueToMethod = () => {
     const amountError = validateAmount();
     if (amountError) {
       setError(amountError);
       return;
     }
+    setError(null);
+    setDepositStep('method');
+  };
 
-    const id = appId || config.privyAppId || '';
-    if (!id || id.includes('insert-your-privy-app-id')) {
-      setError('Payment is not configured (missing Privy app ID). Please contact support.');
+  const handleStartPayment = async () => {
+    setError(null);
+    const amountError = validateAmount();
+    if (amountError) {
+      setError(amountError);
+      setDepositStep('amount');
       return;
     }
-
+    const id = appId || config.privyAppId || '';
+    if (!id || id.includes('insert-your-privy-app-id')) {
+      setError('Payment is not configured. Please contact support.');
+      return;
+    }
     if (authenticated) {
       setIsLoading(true);
       const target = await waitForWallet(null, 5000);
@@ -435,7 +512,6 @@ export function CenteFiatOnramp({
       await executeFunding(parseFloat(amount), selectedMethod, selectedToken, target);
       return;
     }
-
     setView('enter-email');
   };
 
@@ -465,7 +541,7 @@ export function CenteFiatOnramp({
       await sendCode({ email });
       setCooldown(30);
     } catch (err) {
-      setError(err?.message || 'Could not resend the code. Please try again.');
+      setError(err?.message || 'Could not resend code. Please try again.');
     }
   };
 
@@ -477,7 +553,6 @@ export function CenteFiatOnramp({
     }
     setIsLoading(true);
     setError(null);
-
     try {
       const loginRes = await loginWithCode({ code: otpCode });
       const loggedInUser = loginRes?.user || user;
@@ -485,10 +560,9 @@ export function CenteFiatOnramp({
         ? getSolanaWalletAddress(loggedInUser)
         : getEvmWalletAddress(loggedInUser, []);
 
-      // Embedded wallet creation is async - wait for it instead of failing immediately.
       const target = await waitForWallet(fromLogin);
       if (!target) {
-        setError(`Signed in, but your ${networkLabel} wallet is still being created. Tap Buy again in a moment.`);
+        setError(`Signed in, but your ${networkLabel} wallet is still being created.`);
         setIsLoading(false);
         setView('form');
         return;
@@ -503,708 +577,383 @@ export function CenteFiatOnramp({
   const amountNum = parseFloat(amount) || 0;
   const buyDisabled = isLoading || amountNum <= 0;
 
+  const navItems = [
+    {
+      id: 'stocks',
+      icon: TrendingUp,
+      title: 'Trade Halal Stocks',
+      sub: 'Buy and sell 21 Shariah-screened equities',
+      stocks: true,
+    },
+    {
+      id: 'deposit',
+      icon: CreditCard,
+      title: 'Add Funds with Card',
+      sub: 'Instant card payment delivered as USDC',
+    },
+    {
+      id: 'crypto',
+      icon: Zap,
+      title: 'Deposit Crypto',
+      sub: 'Send USDT & crypto directly via Aurora Intent',
+    },
+  ];
+
+  const pageTitles = {
+    stocks: 'Halal Stock Trading',
+    deposit: depositStep === 'method' ? 'Choose Payment Option' : 'Add USDC Funds',
+    crypto: 'Deposit Crypto',
+  };
+
+  const walletChip =
+    authenticated && destinationAddress ? (
+      <>
+        <span className="co-chip co-chip-mono" title={destinationAddress}>
+          <span className="co-dot" aria-hidden="true" />
+          {shortAddr(destinationAddress)}
+        </span>
+        <button
+          type="button"
+          className="co-icon-btn"
+          onClick={() => logout()}
+          title="Sign out"
+          aria-label="Sign out"
+        >
+          <LogOut size={14} aria-hidden="true" />
+        </button>
+      </>
+    ) : (
+      <span className="co-chip">
+        <span className="co-dot" aria-hidden="true" />
+        {isSolana ? 'Solana' : networkLabel}
+      </span>
+    );
+
+  const goTo = (nextPage) => {
+    setError(null);
+    if (nextPage === 'deposit') setDepositStep('amount');
+    setPage(nextPage);
+  };
+
+  /* --------------------------- Render --------------------------- */
+
   return (
-    <div
-      className="w-full max-w-md mx-auto"
-      style={{
-        fontFamily: theme.fontFamily,
-        boxSizing: 'border-box',
-        touchAction: 'manipulation',
-        WebkitTextSizeAdjust: '100%',
-      }}
-    >
+    <div className="co-root" style={rootVars}>
+      <style>{CSS}</style>
+
       {isSuccess && paymentResult ? (
-        /* 1. SUCCESS VIEW */
-        <div className="text-center" style={{ ...cardStyle, padding: '32px 28px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-          <div
-            className="w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center"
-            style={{
-              backgroundColor: 'rgba(184, 134, 11, 0.15)',
-              border: `1px solid ${theme.goldAccent}`,
-              color: theme.goldAccent,
-            }}
-          >
-            <CircleCheck size={36} />
+        /* ====================== SUCCESS (receipt) ====================== */
+        <div className="co-card" role="status">
+          <div className="co-check">
+            <CircleCheck size={30} strokeWidth={2} aria-hidden="true" />
           </div>
-          <h3 style={{ color: theme.textPrimary, fontSize: '22px', fontWeight: 700, margin: '0 0 6px' }}>
-            Payment Submitted
-          </h3>
-          <p style={{ color: theme.textSecondary, fontSize: '13px', margin: '0 0 24px' }}>
-            Your {paymentResult.amount} {paymentResult.token} is on its way to your {paymentResult.network} wallet.
-            Funds arrive once the payment provider settles.
+          <h3 className="co-title">Payment Submitted</h3>
+          <div className="co-receipt-amount">
+            {paymentResult.amount}
+            <small>{paymentResult.token}</small>
+          </div>
+          <p className="co-lede" style={{ marginBottom: 0 }}>
+            Delivered to your {paymentResult.network} wallet once the transaction settles.
           </p>
 
-          <div
-            className="space-y-2"
-            style={{
-              backgroundColor: theme.inputBg,
-              borderRadius: '16px',
-              border: '1px solid #1e293b',
-              padding: '16px 20px',
-              textAlign: 'left',
-              fontSize: '12px',
-              lineHeight: '22px',
-              marginBottom: '24px',
-            }}
-          >
-            <Row label="Amount:">
-              <strong style={{ color: theme.textPrimary, fontSize: '14px' }}>
-                {paymentResult.amount} {paymentResult.token}
-              </strong>
-            </Row>
-            <Row label="Network:">
-              <span style={{ color: theme.goldAccent, fontWeight: 600 }}>{paymentResult.network}</span>
-            </Row>
-            <Row label="Method:">
-              <span style={{ color: '#ffffff', fontWeight: 600 }}>{paymentResult.method}</span>
-            </Row>
+          <div className="co-dl">
+            <Line label="Network">{paymentResult.network}</Line>
+            <Line label="Payment">{paymentResult.method}</Line>
             {paymentResult.recipient && (
-              <Row label="Recipient Wallet:">
-                <span className="font-mono text-[11px]" style={{ color: theme.goldAccent }} title={paymentResult.recipient}>
-                  {paymentResult.recipient.slice(0, 4)}...{paymentResult.recipient.slice(-4)}
+              <Line label="Wallet">
+                <span className="co-mono" title={paymentResult.recipient}>
+                  {shortAddr(paymentResult.recipient)}
                 </span>
-              </Row>
+              </Line>
             )}
-            {paymentResult.mint && (
-              <Row label="Token Mint:">
-                <span className="font-mono text-[11px]" style={{ color: '#94a3b8' }} title={paymentResult.mint}>
-                  {paymentResult.mint.slice(0, 6)}...{paymentResult.mint.slice(-6)}
-                </span>
-              </Row>
-            )}
-            {paymentResult.hash && isValidTxRef(paymentResult.hash) ? (
-              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #1e293b', wordBreak: 'break-all' }}>
-                <span style={{ color: theme.textMuted, display: 'block', marginBottom: '2px' }}>Transaction Ref:</span>
+            {paymentResult.hash && isValidTxRef(paymentResult.hash) && (
+              <div>
+                <div style={{ marginBottom: 4 }}>Transaction Reference</div>
                 {paymentResult.network === 'Solana' && paymentResult.hash.length >= 40 ? (
                   <a
+                    className="co-mono co-ref"
                     href={`https://solscan.io/tx/${paymentResult.hash}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="font-mono underline"
-                    style={{ fontSize: '11px', color: theme.goldAccent }}
                   >
                     {paymentResult.hash}
                   </a>
                 ) : (
-                  <code className="font-mono" style={{ fontSize: '11px', color: '#94a3b8' }}>
-                    {paymentResult.hash}
-                  </code>
+                  <code className="co-mono" style={{ wordBreak: 'break-all' }}>{paymentResult.hash}</code>
                 )}
               </div>
-            ) : null}
+            )}
           </div>
 
-          <p style={{ color: theme.goldAccent, fontSize: '13px', fontWeight: 600, margin: '0 0 4px' }}>
-            Redirecting back to your Cente dashboard...
-          </p>
-          <p style={{ color: theme.textMuted, fontSize: '11px', margin: '0 0 18px' }}>
-            If you are not redirected automatically in a few seconds, click below.
-          </p>
-
-          <a
-            href={safeRedirect}
-            style={{
-              display: 'block',
-              width: '100%',
-              padding: '14px',
-              backgroundColor: '#1e293b',
-              color: '#ffffff',
-              borderRadius: '14px',
-              textDecoration: 'none',
-              fontSize: '14px',
-              fontWeight: 600,
-              boxSizing: 'border-box',
-            }}
-          >
-            Return to Cente Now
+          <div className="co-redirect">
+            <Spinner size={13} />
+            Returning to dashboard...
+          </div>
+          <a href={safeRedirect} className="co-btn-ghost">
+            Return to HalalVest
           </a>
         </div>
       ) : view === 'enter-email' ? (
-        /* 2. EMAIL VIEW */
-        <div style={cardStyle}>
-          <BackButton
-            onClick={() => {
-              setView('form');
-              setError(null);
-            }}
-          />
-          <div className="text-center" style={{ marginBottom: '22px' }}>
-            <img
-              src={config.logoUrl}
-              alt="Cente"
-              style={{ height: '36px', width: 'auto', display: 'inline-block', marginBottom: '14px' }}
-            />
-            <h3 style={{ color: theme.textPrimary, fontSize: '19px', fontWeight: 700, margin: '0 0 6px' }}>
-              Sign in to fetch your wallet
-            </h3>
-            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}>
-              We'll send a 6-digit confirmation code to access your {networkLabel} wallet
-            </p>
+        /* ====================== EMAIL ====================== */
+        <div className="co-card">
+          <div className="co-head">
+            <BackButton onClick={() => { setView('form'); setError(null); }} />
           </div>
+          <h3 className="co-title">Sign in to continue</h3>
+          <p className="co-lede">We'll email you a 6-digit code to access your {networkLabel} wallet.</p>
 
           <form onSubmit={handleSendEmailCode}>
-            <div
-              className="flex items-center"
-              style={{
-                backgroundColor: theme.inputBg,
-                border: '1px solid #1e293b',
-                borderRadius: '16px',
-                padding: '12px 16px',
-                marginBottom: '18px',
-                boxSizing: 'border-box',
-              }}
-            >
-              <Mail size={18} style={{ color: theme.goldAccent, marginRight: '10px' }} />
-              <input
-                type="email"
-                required
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@email.com"
-                style={{
-                  width: '100%',
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  color: '#ffffff',
-                  fontSize: '16px',
-                  fontFamily: theme.fontFamily,
-                }}
-              />
-            </div>
+            <label className="co-input-label" htmlFor="co-email">Email address</label>
+            <input
+              id="co-email"
+              className="co-input"
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@domain.com"
+            />
             <ErrorBox message={error} />
-            <button type="submit" disabled={isLoading} style={goldButtonStyle(isLoading)}>
-              {isLoading ? 'Sending Code...' : 'Continue'}
+            <button type="submit" disabled={isLoading} className="co-btn">
+              {isLoading ? (<><Spinner /> Sending code</>) : 'Continue'}
             </button>
           </form>
         </div>
       ) : view === 'enter-code' ? (
-        /* 3. OTP VIEW */
-        <div style={cardStyle}>
-          <BackButton
-            onClick={() => {
-              setView('enter-email');
-              setOtpCode('');
-              setError(null);
-            }}
-          />
-          <div className="text-center" style={{ marginBottom: '22px' }}>
-            <h3 style={{ color: theme.textPrimary, fontSize: '19px', fontWeight: 700, margin: '0 0 6px' }}>
-              Check your email
-            </h3>
-            <p style={{ color: theme.textSecondary, fontSize: '13px', margin: 0 }}>
-              Enter the 6-digit code sent to <strong style={{ color: '#ffffff' }}>{email}</strong>
-            </p>
-          </div>
-
-          <form onSubmit={handleVerifyCode}>
-            <input
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              pattern="[0-9]*"
-              maxLength={6}
-              autoFocus
-              required
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder="123456"
-              style={{
-                width: '100%',
-                backgroundColor: theme.inputBg,
-                border: '1px solid #1e293b',
-                borderRadius: '16px',
-                padding: '14px 16px',
-                color: '#ffffff',
-                fontSize: '24px',
-                fontWeight: 800,
-                textAlign: 'center',
-                letterSpacing: '0.25em',
-                fontFamily: theme.fontFamily,
-                outline: 'none',
-                boxSizing: 'border-box',
-                marginBottom: '18px',
+        /* ====================== OTP ====================== */
+        <div className="co-card">
+          <div className="co-head">
+            <BackButton
+              onClick={() => {
+                setView('enter-email');
+                setOtpCode('');
+                setError(null);
               }}
             />
+          </div>
+          <h3 className="co-title">Check your inbox</h3>
+          <p className="co-lede">
+            Enter the 6-digit code sent to <strong style={{ color: 'var(--co-text)' }}>{email}</strong>
+          </p>
+
+          <form onSubmit={handleVerifyCode}>
+            <div className="co-otp">
+              {Array.from({ length: 6 }).map((_, i) => {
+                const char = otpCode[i] || '';
+                const isActive = otpFocused && (i === otpCode.length || (i === 5 && otpCode.length === 6));
+                return (
+                  <div key={i} className="co-otp-cell" data-active={isActive}>
+                    {char}
+                  </div>
+                );
+              })}
+              <input
+                className="co-otp-input"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]*"
+                maxLength={6}
+                autoFocus
+                required
+                aria-label="6-digit confirmation code"
+                value={otpCode}
+                onFocus={() => setOtpFocused(true)}
+                onBlur={() => setOtpFocused(false)}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              />
+            </div>
             <ErrorBox message={error} />
-            <button
-              type="submit"
-              disabled={isLoading || otpCode.length < 6}
-              style={goldButtonStyle(isLoading || otpCode.length < 6)}
-            >
-              {isLoading ? 'Verifying & Opening Payment...' : 'Verify & Continue'}
+            <button type="submit" disabled={isLoading || otpCode.length < 6} className="co-btn">
+              {isLoading ? (<><Spinner /> Verifying</>) : (<><BadgeCheck size={16} aria-hidden="true" /> Verify code</>)}
             </button>
-            <button
-              type="button"
-              onClick={handleResendCode}
-              disabled={cooldown > 0}
-              style={{
-                width: '100%',
-                marginTop: '12px',
-                background: 'transparent',
-                border: 'none',
-                color: cooldown > 0 ? theme.textMuted : theme.goldAccent,
-                fontSize: '12px',
-                fontWeight: 600,
-                cursor: cooldown > 0 ? 'not-allowed' : 'pointer',
-                fontFamily: theme.fontFamily,
-              }}
-            >
+            <button type="button" className="co-resend" onClick={handleResendCode} disabled={cooldown > 0}>
               {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
             </button>
           </form>
         </div>
-      ) : (
-        /* 4. MAIN FORM VIEW */
-        <div style={cardStyle}>
-          <div className="text-center" style={{ marginBottom: '20px' }}>
-            {brand === 'halalvest' ? (
-              <div className="flex flex-col items-center justify-center">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 font-black text-sm">
-                    HV
-                  </div>
-                  <span className="text-lg font-black tracking-tight text-white">
-                    HALAL<span className="text-emerald-400">VEST</span>
-                  </span>
-                </div>
-                <span className="text-[10px] font-semibold tracking-wider text-slate-400 uppercase mt-0.5">
-                  Shariah Stock Trading & Wealth
+      ) : page === 'home' ? (
+        /* ====================== HOME ====================== */
+        <div className="co-card">
+          <div className="co-head">
+            <Brand />
+            <div className="co-head-end">{walletChip}</div>
+          </div>
+
+          <div className="co-nav">
+            {navItems.map(({ id, icon: Icon, title, sub, stocks }) => (
+              <button key={id} type="button" className="co-nav-item" onClick={() => goTo(id)}>
+                <span className={`co-nav-icon${stocks ? ' co-nav-icon-stocks' : ''}`}>
+                  <Icon size={20} aria-hidden="true" />
                 </span>
-              </div>
-            ) : (
-              <img src={config.logoUrl} alt="Cente" style={{ height: '38px', width: 'auto', display: 'inline-block' }} />
-            )}
+                <span className="co-nav-body">
+                  <span className="co-nav-title">{title}</span>
+                  <span className="co-nav-sub">{sub}</span>
+                </span>
+                <ChevronRight size={18} className="co-nav-chev" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        /* ====================== SUB-PAGES ====================== */
+        <div className="co-card">
+          <div className="co-head">
+            <BackButton
+              label={page === 'deposit' && depositStep === 'method' ? 'Amount' : 'Home'}
+              onClick={() => {
+                if (page === 'deposit' && depositStep === 'method') {
+                  setError(null);
+                  setDepositStep('amount');
+                } else {
+                  goTo('home');
+                }
+              }}
+            />
+            <div className="co-head-end">{walletChip}</div>
           </div>
 
-          {authenticated && destinationAddress ? (
-            <div className="bg-[#151a24] border border-[#daa520]/30 rounded-2xl p-3.5 mb-5 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                  <div className="text-left">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                      Deposit Destination ({networkLabel})
-                    </div>
-                    <div className="font-mono text-xs font-semibold text-[#daa520]">
-                      {destinationAddress.slice(0, 5)}...{destinationAddress.slice(-5)}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {isSolana && (
-                    <button
-                      type="button"
-                      onClick={handleTriggerBridge}
-                      disabled={isCheckingBridge}
-                      title="Scan and auto-bridge multi-chain deposits to your Solana wallet via Mayan"
-                      className="text-slate-300 hover:text-[#daa520] p-1.5 px-2 rounded-lg bg-slate-800/80 hover:bg-slate-800 transition flex items-center gap-1.5 text-[11px] font-medium border border-slate-700/50"
-                    >
-                      <RefreshCw size={12} className={isCheckingBridge ? 'animate-spin text-[#daa520]' : ''} />
-                      <span>{isCheckingBridge ? 'Scanning...' : 'Scan & Bridge'}</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => logout()}
-                    title="Disconnect"
-                    aria-label="Disconnect"
-                    className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition"
-                  >
-                    <LogOut size={14} />
-                  </button>
-                </div>
-              </div>
+          <h3 className="co-title">{pageTitles[page]}</h3>
 
-              {isSolana && (
-                <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[11px]">
-                  <div className="flex items-center gap-1.5 text-slate-300">
-                    <Sparkles size={12} className="text-[#daa520]" />
-                    <span>
-                      Auto-Bridge to Solana: <strong className="text-emerald-400">Active</strong>
-                    </span>
-                  </div>
-                  {activeEvmWallet && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard?.writeText(activeEvmWallet);
-                        setCopiedEvm(true);
-                        setTimeout(() => setCopiedEvm(false), 2000);
-                      }}
-                      className="text-[10px] font-mono text-slate-400 hover:text-slate-200 transition flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-900/60"
-                      title="Click to copy your multi-chain EVM address (Base, ETH, Polygon, BSC)"
-                    >
-                      <span>
-                        EVM: {activeEvmWallet.slice(0, 4)}...{activeEvmWallet.slice(-4)}
-                      </span>
-                      {copiedEvm ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="bg-[#151a24] border border-[#daa520]/25 rounded-2xl p-3.5 mb-5 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Network</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-bold text-[#daa520]">{isSolana ? 'Solana (SPL)' : networkLabel}</span>
-                  <span className="text-[10px] font-medium bg-[#daa520]/15 text-[#daa520] border border-[#daa520]/30 rounded-full px-2 py-0.5">
-                    Direct
-                  </span>
-                </div>
-              </div>
-              {isSolana && (
-                <div className="flex items-center gap-1.5 text-[11px] text-slate-400 pt-1.5 border-t border-slate-800/80">
-                  <Sparkles size={12} className="text-[#daa520]" />
-                  <span>Multi-chain deposits automatically bridge to Solana via Mayan</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Mode Selector Tabs: Stocks, Card, Crypto */}
-          <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#0b0e14] border border-slate-800/80 rounded-2xl mb-5">
-            <button
-              type="button"
-              onClick={() => setDepositMode('stocks')}
-              className="py-2 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-              style={
-                depositMode === 'stocks'
-                  ? { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: '#ffffff', border: 'none', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)' }
-                  : { background: 'transparent', color: theme.textSecondary, border: 'none' }
-              }
-            >
-              <TrendingUp size={13} />
-              <span>Stocks</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDepositMode('fiat')}
-              className="py-2 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-              style={
-                depositMode === 'fiat'
-                  ? { background: goldGradient, color: '#0b0e14', border: 'none', boxShadow: '0 4px 12px rgba(184, 134, 11, 0.2)' }
-                  : { background: 'transparent', color: theme.textSecondary, border: 'none' }
-              }
-            >
-              <CreditCard size={13} />
-              <span>Card</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDepositMode('aurora')}
-              className="py-2 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-              style={
-                depositMode === 'aurora'
-                  ? { background: goldGradient, color: '#0b0e14', border: 'none', boxShadow: '0 4px 12px rgba(184, 134, 11, 0.2)' }
-                  : { background: 'transparent', color: theme.textSecondary, border: 'none' }
-              }
-            >
-              <Zap size={13} />
-              <span>Crypto</span>
-            </button>
-          </div>
-
-          {depositMode === 'stocks' ? (
+          {page === 'stocks' && (
             <HalalStockTrading
               solanaAddress={activeSolWallet}
               solWallet={solWalletObj}
               authenticated={authenticated}
               onRequireLogin={() => setView('enter-email')}
-              onSwitchToDeposit={() => setDepositMode('fiat')}
+              onSwitchToDeposit={() => goTo('deposit')}
             />
-          ) : depositMode === 'aurora' ? (
-            authenticated && activeSolWallet ? (
+          )}
+
+          {page === 'crypto' &&
+            (authenticated && activeSolWallet ? (
               <AuroraDeposit
                 solanaAddress={activeSolWallet}
                 apiKey={auroraApiKey}
-                onBack={() => setDepositMode('fiat')}
+                onBack={() => goTo('home')}
               />
-            ) : (
-              <div
-                className="p-6 rounded-2xl text-center space-y-4"
-                style={{
-                  background: theme.inputBg,
-                  border: `1px solid ${theme.goldBorder}`,
-                }}
-              >
-                <div
-                  className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center"
-                  style={{
-                    background: 'rgba(218, 165, 32, 0.15)',
-                    border: `1px solid ${theme.goldBorder}`,
-                    color: theme.goldAccent,
-                  }}
-                >
-                  <Zap size={24} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white mb-1">
-                    Deposit USDT & Crypto via Aurora Intent
-                  </h3>
-                  <p className="text-xs" style={{ color: theme.textSecondary }}>
-                    Sign in with your email to reveal your dedicated deposit address. Deposits auto-convert and deliver directly to your Solana wallet.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setView('enter-email')}
-                  style={goldButtonStyle(false)}
-                >
-                  <Mail size={16} />
-                  <span>Sign in with Email</span>
-                </button>
-              </div>
-            )
-          ) : (
-            <>
-              {/* Token indicator - Restricted strictly to USDC */}
-              <div className="mb-4">
-                <label
-                  className="block mb-2"
-                  style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary }}
-                >
-                  Settlement Token on {networkLabel}
-                </label>
-                <div
-                  className="flex items-center justify-between p-2.5 px-3 rounded-2xl bg-[#0b0e14] border border-[#daa520]/25"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div
-                      className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs"
-                      style={{ background: 'rgba(39, 117, 202, 0.2)', color: '#60a5fa', border: '1px solid rgba(96, 165, 250, 0.4)' }}
-                    >
-                      $
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <span>USDC</span>
-                        <span
-                          className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold"
-                          style={{ backgroundColor: 'rgba(218, 165, 32, 0.15)', color: theme.goldAccent }}
-                        >
-                          SPL
-                        </span>
-                      </div>
-                      <div className="text-[10px]" style={{ color: theme.textSecondary }}>
-                        USD Coin (Solana Mainnet)
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[11px] font-bold text-emerald-400">Direct Delivery</span>
-                  </div>
-                </div>
-              </div>
-
-          {/* Amount */}
-          <div style={{ marginBottom: '22px' }}>
-            <div className="flex justify-between items-center" style={{ marginBottom: '8px' }}>
-              <label
-                htmlFor="cente-amount"
-                style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary }}
-              >
-                Deposit Amount ({selectedToken})
-              </label>
-              <span style={{ fontSize: '12px', fontWeight: 600, color: theme.goldAccent }}>
-                {amount || '0'} {selectedToken}
-              </span>
-            </div>
-
-            <div
-              className="flex items-center"
-              style={{
-                backgroundColor: theme.inputBg,
-                border: '1px solid #1e293b',
-                borderRadius: '16px',
-                padding: '10px 16px',
-                boxSizing: 'border-box',
-              }}
-            >
-              <input
-                id="cente-amount"
-                type="text"
-                inputMode="decimal"
-                value={amount}
-                onChange={handleAmountChange}
-                placeholder="20"
-                style={{
-                  width: '100%',
-                  background: 'transparent',
-                  border: 'none',
-                  outline: 'none',
-                  color: '#ffffff',
-                  fontSize: '24px',
-                  fontWeight: 700,
-                  fontFamily: theme.fontFamily,
-                }}
-              />
-              <div
-                className="select-none flex items-center flex-shrink-0"
-                style={{
-                  backgroundColor: 'rgba(218, 165, 32, 0.15)',
-                  color: theme.goldAccent,
-                  border: `1px solid ${theme.goldBorder}`,
-                  borderRadius: '10px',
-                  padding: '6px 14px',
-                  fontSize: '13px',
-                  fontWeight: 700,
-                  letterSpacing: '0.05em',
-                  marginLeft: '8px',
-                }}
-              >
-                {selectedToken}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-4 gap-1.5 mt-2.5">
-              {[20, 50, 100, 250].map((preset) => {
-                const active = String(amount) === String(preset);
-                return (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => {
-                      setAmount(String(preset));
-                      setError(null);
-                    }}
-                    className="py-1 text-xs rounded-lg font-semibold transition"
-                    style={{
-                      background: active ? 'rgba(218, 165, 32, 0.1)' : 'transparent',
-                      color: active ? theme.goldAccent : '#94a3b8',
-                      border: `1px solid ${active ? theme.goldAccent : '#1e293b'}`,
-                      fontFamily: theme.fontFamily,
-                    }}
-                  >
-                    ${preset}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex justify-between items-center" style={{ marginTop: '8px', padding: '0 4px', fontSize: '11px', color: theme.textMuted }}>
-              <span>
-                Target:{' '}
-                <strong style={{ color: theme.goldSecondary, fontWeight: 600 }}>
-                  {amount || '0'} {selectedToken}
-                </strong>
-              </span>
-              <span style={{ color: '#64748b' }}>1 {selectedToken} ≈ $1 USD</span>
-            </div>
-          </div>
-
-          {/* Payment method */}
-          <div style={{ marginBottom: '24px' }}>
-            <div
-              id="cente-method-label"
-              style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: theme.textSecondary, marginBottom: '10px' }}
-            >
-              Payment Method
-            </div>
-
-            <div role="radiogroup" aria-labelledby="cente-method-label" className="flex flex-col" style={{ gap: '10px' }}>
-              {paymentMethods.map((method) => {
-                const Icon = method.icon;
-                const isSelected = selectedMethod === method.id;
-                return (
-                  <button
-                    key={method.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={isSelected}
-                    onClick={() => setSelectedMethod(method.id)}
-                    className="flex items-center justify-between text-left"
-                    style={{
-                      cursor: 'pointer',
-                      padding: '14px 16px',
-                      borderRadius: '16px',
-                      border: isSelected ? `1px solid ${theme.goldBorderActive}` : '1px solid #1e293b',
-                      backgroundColor: isSelected ? theme.methodSelectedBg : theme.methodBg,
-                      boxShadow: isSelected ? theme.goldGlow : 'none',
-                      transition: 'all 0.15s ease',
-                      boxSizing: 'border-box',
-                      width: '100%',
-                      fontFamily: theme.fontFamily,
-                    }}
-                  >
-                    <div className="flex items-center" style={{ gap: '12px' }}>
-                      <div
-                        className="flex items-center justify-center"
-                        style={{
-                          padding: '10px',
-                          borderRadius: '12px',
-                          backgroundColor: isSelected ? 'rgba(184, 134, 11, 0.2)' : '#1e293b',
-                          color: isSelected ? theme.goldAccent : '#94a3b8',
-                          border: isSelected ? '1px solid rgba(218, 165, 32, 0.3)' : 'none',
-                        }}
-                      >
-                        <Icon size={18} />
-                      </div>
-                      <div>
-                        <div className="flex items-center" style={{ gap: '6px' }}>
-                          <span style={{ fontWeight: 600, fontSize: '14px', color: '#ffffff' }}>{method.name}</span>
-                          <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              padding: '2px 7px',
-                              borderRadius: '20px',
-                              backgroundColor: isSelected ? 'rgba(218, 165, 32, 0.2)' : '#1e293b',
-                              color: isSelected ? theme.goldAccent : '#94a3b8',
-                              border: isSelected ? '1px solid rgba(218, 165, 32, 0.3)' : '1px solid #334155',
-                            }}
-                          >
-                            {method.tag}
-                          </span>
-                        </div>
-                        <p style={{ margin: '2px 0 0', fontSize: '11px', color: theme.textSecondary }}>{method.subtitle}</p>
-                      </div>
-                    </div>
-
-                    <div
-                      className="flex items-center justify-center flex-shrink-0"
-                      style={{
-                        width: '18px',
-                        height: '18px',
-                        borderRadius: '50%',
-                        border: isSelected ? `1px solid ${theme.goldAccent}` : '1px solid #475569',
-                        backgroundColor: isSelected ? theme.goldAccent : 'transparent',
-                        color: '#000000',
-                      }}
-                    >
-                      {isSelected && <Check size={11} strokeWidth={3} />}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <ErrorBox message={error} />
-
-          <button
-            type="button"
-            onClick={handleStartPayment}
-            disabled={buyDisabled}
-            style={{ ...goldButtonStyle(buyDisabled), padding: '15px 20px' }}
-          >
-            {isLoading ? (
-              <span>Processing...</span>
             ) : (
               <>
-                <span>
-                  Buy {amount || '0'} {selectedToken} on {networkLabel}
-                </span>
-                <ArrowRight size={16} />
+                <p className="co-lede">
+                  Sign in with your email to get your dedicated deposit address. Crypto you send is converted and delivered directly to your Solana wallet.
+                </p>
+                <button type="button" className="co-btn" onClick={() => setView('enter-email')}>
+                  <Mail size={16} aria-hidden="true" />
+                  Sign in with email
+                </button>
               </>
-            )}
-          </button>
+            ))}
+
+          {page === 'deposit' && depositStep === 'amount' && (
+            <>
+              <p className="co-lede">Enter the amount of USDC you want to purchase.</p>
+
+              <label className="co-label" htmlFor="co-deposit-amount">Amount</label>
+              <div className="co-amount">
+                <span className="co-amount-sign">$</span>
+                <input
+                  id="co-deposit-amount"
+                  className="co-amount-input"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="20"
+                  value={amount}
+                  onChange={handleAmountChange}
+                />
+                <span className="co-amount-unit">{selectedToken}</span>
+              </div>
+
+              <div className="co-presets" role="group" aria-label="Quick amount presets">
+                {[20, 50, 100, 250].map((preset) => {
+                  const active = String(amount) === String(preset);
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      className="co-preset"
+                      aria-pressed={active}
+                      onClick={() => {
+                        setAmount(String(preset));
+                        setError(null);
+                      }}
+                    >
+                      ${preset}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="co-summary">
+                <div className="co-row">
+                  <span>Network</span>
+                  <span className="co-row-value">{isSolana ? 'Solana Mainnet (SPL)' : networkLabel}</span>
+                </div>
+                <div className="co-row">
+                  <span>Settlement</span>
+                  <span className="co-row-value">Direct Delivery</span>
+                </div>
+              </div>
+
+              <ErrorBox message={error} />
+              <button
+                type="button"
+                className="co-btn"
+                onClick={handleContinueToMethod}
+                disabled={parseFloat(amount || '0') <= 0}
+              >
+                Continue
+              </button>
+            </>
+          )}
+
+          {page === 'deposit' && depositStep === 'method' && (
+            <>
+              <div className="co-order">
+                <div className="co-order-amount">
+                  {amount}
+                  <small>{selectedToken}</small>
+                </div>
+                <div className="co-order-sub">
+                  ${amount} USD delivered as USDC to your {isSolana ? 'Solana' : networkLabel} wallet
+                </div>
+              </div>
+
+              <div className="co-methods" role="radiogroup" aria-label="Payment method">
+                {paymentMethods.map((method) => {
+                  const Icon = method.icon;
+                  const isSelected = selectedMethod === method.id;
+                  return (
+                    <button
+                      key={method.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      className="co-method"
+                      onClick={() => setSelectedMethod(method.id)}
+                    >
+                      <span className="co-method-icon">
+                        <Icon size={17} aria-hidden="true" />
+                      </span>
+                      <span className="co-method-body">
+                        <span className="co-method-name">
+                          {method.name}
+                          <span className="co-method-tag">{method.tag}</span>
+                        </span>
+                        <p className="co-method-sub">{method.subtitle}</p>
+                      </span>
+                      <span className="co-radio" aria-hidden="true">
+                        {isSelected && <Check size={11} strokeWidth={3.5} />}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <ErrorBox message={error} />
+              <button type="button" className="co-btn" onClick={handleStartPayment} disabled={buyDisabled}>
+                {isLoading ? (<><Spinner /> Processing</>) : (<>Buy {amount || '0'} {selectedToken}</>)}
+              </button>
             </>
           )}
         </div>

@@ -2,7 +2,6 @@ import React, { useMemo } from 'react';
 import { PrivyProvider } from '@privy-io/react-auth';
 import { Toaster } from 'sonner';
 import { CenteFiatOnramp } from './CenteFiatOnramp';
-import { AutoBridgeRunner } from './wallet/AutoBridgeRunner';
 import { config } from '../config';
 import { safeRedirectUrl, DEFAULT_REDIRECT } from '../lib/safe-redirect';
 
@@ -15,9 +14,9 @@ function ConfigError({ message }) {
         margin: '0 auto',
         padding: '16px',
         borderRadius: '12px',
-        border: '1px solid rgba(245, 158, 11, 0.3)',
-        background: 'rgba(245, 158, 11, 0.08)',
-        color: '#b45309',
+        border: '1px solid rgba(16, 185, 129, 0.3)',
+        background: 'rgba(16, 185, 129, 0.08)',
+        color: '#10b981',
         fontSize: '13px',
         fontFamily: 'system-ui, sans-serif',
       }}
@@ -53,8 +52,7 @@ export function CentePayment({
       loginMethods: ['email'],
       appearance: {
         theme: 'dark',
-        accentColor: '#daa520',
-        logo: config.logoUrl,
+        accentColor: '#10b981',
       },
       embeddedWallets: {
         ethereum: { createOnLogin: 'all-users' },
@@ -74,7 +72,6 @@ export function CentePayment({
   return (
     <PrivyProvider appId={appId} config={privyConfig}>
       {toasts && <Toaster richColors position={toastPosition} theme="dark" closeButton />}
-      <AutoBridgeRunner />
       <CenteFiatOnramp
         appId={appId}
         defaultAmount={defaultAmount}
