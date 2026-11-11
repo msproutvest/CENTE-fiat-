@@ -33,6 +33,7 @@ export const HALAL_STOCKS = [
     sector: 'Auto / energy',
     mint: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB',
     decimals: 8,
+    referencePriceUsd: 386.50,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Clean electric mobility & solar energy storage; debt ratio well under 33%.',
@@ -45,6 +46,7 @@ export const HALAL_STOCKS = [
     sector: 'Semiconductors / AI',
     mint: 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh',
     decimals: 8,
+    referencePriceUsd: 178.20,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI & S&P Shariah',
     complianceSummary: 'Leading AI GPU computing; zero haram revenue; low debt ratio (<33%).',
@@ -57,6 +59,7 @@ export const HALAL_STOCKS = [
     sector: 'Technology',
     mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp',
     decimals: 8,
+    referencePriceUsd: 260.40,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Permissible hardware & software; liquid cash & leverage within Shariah ratios.',
@@ -69,6 +72,7 @@ export const HALAL_STOCKS = [
     sector: 'Semiconductors',
     mint: 'XshPgPdXFRWB8tP1j82rebb2Q9rPgGX37RuqzohmArM',
     decimals: 8,
+    referencePriceUsd: 24.80,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Microprocessor design and fabrication; compliant debt and liquidity metrics.',
@@ -81,6 +85,7 @@ export const HALAL_STOCKS = [
     sector: 'Payment network',
     mint: 'XsqgsbXwWogGJsNcVZ3TyVouy2MbTkfCFhCGGGcQZ2p',
     decimals: 8,
+    referencePriceUsd: 332.10,
     shariahStatus: 'Screened Equities',
     shariahBoard: 'Global Payment Infrastructure',
     complianceSummary: 'Digital transaction rails and network routing; fee-based electronic processing.',
@@ -93,6 +98,7 @@ export const HALAL_STOCKS = [
     sector: 'Payment network',
     mint: 'XsApJFV9MAktqnAc6jqzsHVujxkGm9xcSUffaBoYLKC',
     decimals: 8,
+    referencePriceUsd: 524.30,
     shariahStatus: 'Screened Equities',
     shariahBoard: 'Payment Technology',
     complianceSummary: 'Global payments network technology and electronic transaction facilitation.',
@@ -105,6 +111,7 @@ export const HALAL_STOCKS = [
     sector: 'Software / cloud',
     mint: 'XsjFwUPiLofddX5cWFHW35GCbXcSu1BCUGfxoQAQjeL',
     decimals: 8,
+    referencePriceUsd: 184.60,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Enterprise database software, cloud engineering and computing architecture.',
@@ -117,9 +124,10 @@ export const HALAL_STOCKS = [
     sector: 'Semiconductors / software',
     mint: 'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo',
     decimals: 8,
+    referencePriceUsd: 172.90,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
-    complianceSummary: 'Data center networking chips and enterprise infrastructure software.',
+    complianceSummary: 'Semiconductor design and mission-critical enterprise infrastructure software.',
     icon: 'https://companiesmarketcap.com/img/company-logos/64/AVGO.png',
   },
   {
@@ -129,9 +137,10 @@ export const HALAL_STOCKS = [
     sector: 'Semiconductors',
     mint: 'XsXcJ6GZ9kVnjqGsjBnktRcuwMBmvKWh8S93RefZ1rF',
     decimals: 8,
+    referencePriceUsd: 136.50,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
-    complianceSummary: 'High-performance CPUs, GPUs and data center acceleration chips.',
+    complianceSummary: 'High-performance microprocessors, graphics chips and data-center accelerators.',
     icon: 'https://companiesmarketcap.com/img/company-logos/64/AMD.png',
   },
   {
@@ -139,11 +148,12 @@ export const HALAL_STOCKS = [
     name: 'Nike Inc.',
     ticker: 'NKE',
     sector: 'Apparel / footwear',
-    mint: 'XsNKE1111111111111111111111111111111111',
+    mint: 'XsNKE11111111111111111111111111111111111',
     decimals: 8,
-    shariahStatus: 'Halal Certified',
-    shariahBoard: 'AAOIFI Compliant',
-    complianceSummary: 'Athletic footwear and sports apparel design and worldwide distribution.',
+    referencePriceUsd: 78.40,
+    shariahStatus: 'Screened Equities',
+    shariahBoard: 'Consumer Goods',
+    complianceSummary: 'Athletic footwear, apparel and sports equipment manufacturing.',
     icon: 'https://companiesmarketcap.com/img/company-logos/64/NKE.png',
   },
   {
@@ -153,9 +163,10 @@ export const HALAL_STOCKS = [
     sector: 'Non-alcoholic beverages',
     mint: 'XsaBXg8dU5cPM6ehmVctMkVqoiRG2ZjMo1cyBJ3AykQ',
     decimals: 8,
-    shariahStatus: 'Halal Certified',
-    shariahBoard: 'AAOIFI Compliant',
-    complianceSummary: '100% non-alcoholic consumer beverages; compliant core operations.',
+    referencePriceUsd: 65.20,
+    shariahStatus: 'Screened Equities',
+    shariahBoard: 'Consumer Non-Alcoholic',
+    complianceSummary: 'Non-alcoholic beverage manufacturing, syrups and global distribution.',
     icon: 'https://companiesmarketcap.com/img/company-logos/64/KO.png',
   },
   {
@@ -165,9 +176,10 @@ export const HALAL_STOCKS = [
     sector: 'Pharmaceuticals',
     mint: 'Xsnuv4omNoHozR6EEW5mXkw8Nrny5rB3jVfLqi6gKMH',
     decimals: 8,
+    referencePriceUsd: 762.00,
     shariahStatus: 'Halal Certified',
-    shariahBoard: 'AAOIFI Compliant',
-    complianceSummary: 'Life-saving medicines and therapeutic healthcare solutions.',
+    shariahBoard: 'Healthcare / AAOIFI',
+    complianceSummary: 'Human therapeutics, diabetes care, oncology and life-saving medicine.',
     icon: 'https://companiesmarketcap.com/img/company-logos/64/LLY.png',
   },
   {
@@ -177,9 +189,10 @@ export const HALAL_STOCKS = [
     sector: 'Oil & gas',
     mint: 'XsaHND8sHyfMfsWPj6kSdd5VwvCayZvjYgKmmcNL5qh',
     decimals: 8,
+    referencePriceUsd: 118.90,
     shariahStatus: 'Screened Equities',
     shariahBoard: 'Energy & Commodities',
-    complianceSummary: 'Energy exploration, refining, and global petrochemical infrastructure.',
+    complianceSummary: 'Energy exploration, natural gas production and petrochemical infrastructure.',
     icon: 'https://companiesmarketcap.com/img/company-logos/64/XOM.png',
   },
   {
@@ -189,6 +202,7 @@ export const HALAL_STOCKS = [
     sector: 'Oil & gas',
     mint: 'XsNNMt7WTNA2sV3jrb1NNfNgapxRF5i4i6GcnTRRHts',
     decimals: 8,
+    referencePriceUsd: 156.40,
     shariahStatus: 'Screened Equities',
     shariahBoard: 'Energy & Commodities',
     complianceSummary: 'Global integrated energy operations, fuels and clean technology research.',
@@ -201,6 +215,7 @@ export const HALAL_STOCKS = [
     sector: 'Enterprise software',
     mint: 'XsczbcQ3zfcgAEt9qHQES8pxKAVG5rujPSHQEXi4kaN',
     decimals: 8,
+    referencePriceUsd: 312.50,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Cloud-based customer relationship management and business software.',
@@ -213,6 +228,7 @@ export const HALAL_STOCKS = [
     sector: 'Software / digital media tools',
     mint: 'XsDZMGEU8zadWFCkTtPBoPWYcUX3JHVmghnwf2Mve2q',
     decimals: 8,
+    referencePriceUsd: 492.00,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Digital creativity, document cloud and graphic design productivity software.',
@@ -225,6 +241,7 @@ export const HALAL_STOCKS = [
     sector: 'Networking / technology',
     mint: 'Xsr3pdLQyXvDJBFgpR5nexCEZwXvigb8wbPYp4YoNFf',
     decimals: 8,
+    referencePriceUsd: 58.70,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Enterprise internet routers, cybersecurity and telecommunications hardware.',
@@ -237,6 +254,7 @@ export const HALAL_STOCKS = [
     sector: 'Semiconductors',
     mint: 'XsTXN11111111111111111111111111111111111',
     decimals: 8,
+    referencePriceUsd: 208.50,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Analog chips and embedded processing solutions for automotive and industry.',
@@ -249,6 +267,7 @@ export const HALAL_STOCKS = [
     sector: 'Semiconductors / wireless',
     mint: 'XsUUG8bjFN2KvzLTpzavvEKdAjMAeLTZiTeAQJ9uhvB',
     decimals: 8,
+    referencePriceUsd: 164.80,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Wireless 5G mobile communications, Snapdragon processors and modem chipsets.',
@@ -261,6 +280,7 @@ export const HALAL_STOCKS = [
     sector: 'Coffee / food service',
     mint: 'XsSBUX1111111111111111111111111111111111',
     decimals: 8,
+    referencePriceUsd: 98.60,
     shariahStatus: 'Screened Equities',
     shariahBoard: 'Consumer Services',
     complianceSummary: 'Specialty coffee roasting, non-alcoholic food and global beverage retail.',
@@ -273,6 +293,7 @@ export const HALAL_STOCKS = [
     sector: 'Semiconductor IP',
     mint: 'XsARM11111111111111111111111111111111111',
     decimals: 8,
+    referencePriceUsd: 142.30,
     shariahStatus: 'Halal Certified',
     shariahBoard: 'AAOIFI Compliant',
     complianceSummary: 'Energy-efficient micro-architecture IP powering 99% of global smartphones.',
@@ -281,3 +302,18 @@ export const HALAL_STOCKS = [
 ];
 
 export const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+/**
+ * Lookup stock metadata by mint address or ticker symbol
+ */
+export function findHalalStock(identifier) {
+  if (!identifier) return null;
+  const target = String(identifier).trim().toUpperCase();
+  return (
+    HALAL_STOCKS.find(
+      (s) => s.symbol.toUpperCase() === target || s.mint.toUpperCase() === target
+    ) || null
+  );
+}
+
+export default HALAL_STOCKS;

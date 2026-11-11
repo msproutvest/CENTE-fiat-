@@ -444,7 +444,7 @@ export function CenteFiatOnramp({
           network: networkLabel,
           mint: isSolana ? tokenMeta.mintAddress : null,
           recipient: targetAddress,
-          method: 'CARD PAYMENT',
+          method: String(method).toUpperCase(),
         };
         setIsSuccess(true);
         setPaymentResult(details);

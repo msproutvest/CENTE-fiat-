@@ -261,7 +261,13 @@ export function HalalStockTrading({
   const [selectedStock, setSelectedStock] = useState(HALAL_STOCKS[0]);
   const [tradeMode, setTradeMode] = useState('buy'); // 'buy' | 'sell'
   const [amount, setAmount] = useState('50');
-  const [stockPrices, setStockPrices] = useState({});
+  const [stockPrices, setStockPrices] = useState(() => {
+    const map = {};
+    HALAL_STOCKS.forEach((s) => {
+      map[s.symbol] = s.referencePriceUsd || 100;
+    });
+    return map;
+  });
   const [userUsdcBalance, setUserUsdcBalance] = useState(0);
   const [userStockBalance, setUserStockBalance] = useState(0);
   const [quote, setQuote] = useState(null);
@@ -273,11 +279,15 @@ export function HalalStockTrading({
   const [tradeSuccess, setTradeSuccess] = useState(null);
   const [showShariahDetails, setShowShariahDetails] = useState(false);
 
-  // Fetch live price for selected stock
+  // Fetch live price for selected stock with caching and fallback
   useEffect(() => {
     let isMounted = true;
     async function loadPrice() {
-      const price = await fetchStockPriceUsd(selectedStock.mint, selectedStock.decimals);
+      const price = await fetchStockPriceUsd(
+        selectedStock.mint,
+        selectedStock.decimals,
+        selectedStock.referencePriceUsd
+      );
       if (isMounted && price) {
         setStockPrices((prev) => ({ ...prev, [selectedStock.symbol]: price }));
       }
@@ -307,14 +317,14 @@ export function HalalStockTrading({
     return () => clearInterval(interval);
   }, [solanaAddress, selectedStock]);
 
-  // Debounced quote fetching
+  // Debounced quote fetching with AbortController and rate-limit protection
   useEffect(() => {
     let isMounted = true;
-    setQuote(null);
-    setQuoteError(null);
+    const abortCtrl = new AbortController();
 
     const val = parseFloat(amount);
     if (!val || val <= 0) {
+      setQuote(null);
       setQuoteLoading(false);
       return;
     }
@@ -326,12 +336,10 @@ export function HalalStockTrading({
         let inputMint, outputMint, rawAmount;
 
         if (tradeMode === 'buy') {
-          // Pay USDC (6 decimals) -> Get Stock (8 decimals)
           inputMint = SOLANA_USDC_MINT;
           outputMint = selectedStock.mint;
           rawAmount = Math.round(val * 10 ** 6);
         } else {
-          // Pay Stock (8 decimals) -> Get USDC (6 decimals)
           inputMint = selectedStock.mint;
           outputMint = SOLANA_USDC_MINT;
           rawAmount = Math.round(val * 10 ** selectedStock.decimals);
@@ -342,25 +350,48 @@ export function HalalStockTrading({
           outputMint,
           amountRaw: rawAmount,
           slippageBps: 50,
+          signal: abortCtrl.signal,
         });
 
         if (isMounted) {
           setQuote(q);
           setQuoteError(null);
+
+          // Update stock price from the quote directly
+          if (q?.outAmount) {
+            let derived = null;
+            if (tradeMode === 'buy') {
+              const shares = Number(q.outAmount) / 10 ** selectedStock.decimals;
+              if (shares > 0) derived = Number((val / shares).toFixed(2));
+            } else {
+              const usdc = Number(q.outAmount) / 10 ** 6;
+              if (val > 0) derived = Number((usdc / val).toFixed(2));
+            }
+            if (derived) {
+              setStockPrices((prev) => ({ ...prev, [selectedStock.symbol]: derived }));
+            }
+          }
         }
       } catch (err) {
+        if (err?.name === 'AbortError') return;
         if (isMounted) {
           setQuote(null);
-          setQuoteError(err?.message || 'No trade route available for this asset.');
+          const rawMsg = String(err?.message || '');
+          if (rawMsg.toLowerCase().includes('too many requests') || rawMsg.includes('429')) {
+            setQuoteError('Market is busy, retrying in a moment...');
+          } else {
+            setQuoteError(rawMsg || 'No trade route available for this asset.');
+          }
         }
       } finally {
         if (isMounted) setQuoteLoading(false);
       }
-    }, 450);
+    }, 650);
 
     return () => {
       isMounted = false;
       clearTimeout(timer);
+      abortCtrl.abort();
     };
   }, [amount, selectedStock, tradeMode]);
 
@@ -538,17 +569,16 @@ export function HalalStockTrading({
 
       {/* Shariah Criteria Details Panel */}
       {showShariahDetails && (
-        <div className="p-3 rounded-xl text-[11px] space-y-1.5 bg-[#060c09] border border-emerald-500/25 text-slate-300">
+        <div className="p-2.5 rounded-xl text-[11px] space-y-1 bg-[#060c09] border border-emerald-500/25 text-slate-300">
           <div className="font-semibold text-emerald-400 text-xs flex items-center gap-1">
-            <Sparkles size={12} />
-            Halalvest Shariah Screening Standards
+            <Sparkles size={11} />
+            AAOIFI & S&P Shariah Certified
           </div>
-          <p className="leading-relaxed">
-            All 21 stocks are strictly screened under <strong>AAOIFI</strong> and{' '}
-            <strong>S&P Shariah</strong> standards. Zero interest banking, alcohol, gambling, or non-halal media. Total debt to market cap is strictly under 33%.
+          <p className="text-[10px] text-slate-400 leading-normal">
+            Zero interest banking, gambling, or alcohol. Total debt &lt; 33%.
           </p>
-          <div className="text-[10px] pt-1 text-slate-400 border-t border-emerald-950">
-            Current: <strong>{selectedStock.name}</strong> •{' '}
+          <div className="text-[10px] pt-1 text-slate-400 border-t border-emerald-950/60 truncate">
+            Current: <strong className="text-white">{selectedStock.name}</strong> •{' '}
             <span className="text-emerald-400">{selectedStock.complianceSummary}</span>
           </div>
         </div>

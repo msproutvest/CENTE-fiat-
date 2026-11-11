@@ -74,23 +74,23 @@ export const theme = {
 export const paymentMethods = [
   {
     id: 'stripe',
-    name: 'Debit or Credit Card',
-    tag: 'Instant',
-    subtitle: 'Visa, Mastercard, Apple Pay & Google Pay',
+    name: 'Stripe',
+    tag: 'Europe / US',
+    subtitle: 'Cards, Apple Pay, Google Pay & bank transfers',
     icon: CreditCard,
   },
   {
     id: 'meld',
-    name: 'Bank Transfer & Local Cards',
+    name: 'Meld',
     tag: 'Global',
-    subtitle: 'Direct bank debit, PIX & international cards',
+    subtitle: 'Transak, Swapped & 100+ local payment methods',
     icon: Globe,
   },
   {
     id: 'moonpay',
-    name: 'Instant Card Checkout',
-    tag: 'Fast',
-    subtitle: 'Cards & instant bank wire delivery',
+    name: 'MoonPay',
+    tag: 'Popular',
+    subtitle: 'Fast crypto purchase via cards & bank wire',
     icon: Zap,
   },
 ];

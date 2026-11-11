@@ -1,4 +1,4 @@
-import { SOLANA_USDC_MINT } from '../data/halalStocks';
+import { SOLANA_USDC_MINT, HALAL_STOCKS } from '../data/halalStocks';
 
 const JUPITER_API_BASES = [
   'https://lite-api.jup.ag/swap/v1',
@@ -11,17 +11,33 @@ const SOLANA_RPCS = [
   'https://rpc.ankr.com/solana',
 ];
 
+// In-memory quote cache (key: input:output:amount:slippage -> { data, timestamp })
+const quoteCache = new Map();
+const QUOTE_CACHE_TTL = 30_000; // 30 seconds
+
+// In-memory price cache (mint -> { price, timestamp })
+const priceCache = new Map();
+const inFlightPriceRequests = new Map();
+const PRICE_CACHE_TTL = 180_000; // 3 minutes
+
 /**
- * Fetch a swap route quote from Jupiter DEX Aggregator
+ * Fetch a swap route quote from Jupiter DEX Aggregator with automatic retry and rate-limit smoothing
  */
 export async function getJupiterStockQuote({
   inputMint = SOLANA_USDC_MINT,
   outputMint,
   amountRaw,
   slippageBps = 50,
+  signal,
 }) {
   if (!outputMint || !amountRaw || amountRaw <= 0) {
     throw new Error('Valid output mint and amount are required for quote.');
+  }
+
+  const cacheKey = `${inputMint}:${outputMint}:${amountRaw}:${slippageBps}`;
+  const cached = quoteCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < QUOTE_CACHE_TTL) {
+    return cached.data;
   }
 
   const params = new URLSearchParams({
@@ -34,23 +50,58 @@ export async function getJupiterStockQuote({
   });
 
   let lastError = null;
+
   for (const base of JUPITER_API_BASES) {
-    try {
-      const res = await fetch(`${base}/quote?${params.toString()}`);
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error || errData?.message || `HTTP ${res.status}`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(`${base}/quote?${params.toString()}`, { signal });
+
+        if (res.status === 429) {
+          // If we have an existing quote for this pair in cache, gracefully reuse it
+          if (cached?.data) {
+            return cached.data;
+          }
+          if (attempt === 0) {
+            // Short backoff delay with random jitter (600ms - 900ms)
+            await new Promise((r) => setTimeout(r, 600 + Math.random() * 300));
+            continue;
+          }
+          throw new Error('Market execution is busy right now. Retrying in a moment...');
+        }
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          const errMsg = String(errData?.error || errData?.message || `HTTP ${res.status}`);
+          if (errMsg.toLowerCase().includes('too many requests') || errMsg.includes('429')) {
+            throw new Error('Market execution is busy right now. Retrying in a moment...');
+          }
+          throw new Error(errMsg);
+        }
+
+        const data = await res.json();
+        if (data?.outAmount) {
+          const result = {
+            ...data,
+            _sourceBase: base,
+          };
+          quoteCache.set(cacheKey, { data: result, timestamp: Date.now() });
+          return result;
+        }
+      } catch (err) {
+        if (err?.name === 'AbortError') throw err;
+        const msg = String(err?.message || 'Quote request failed');
+        if (msg.toLowerCase().includes('too many requests') || msg.includes('429')) {
+          lastError = 'Market execution is busy right now. Retrying in a moment...';
+        } else {
+          lastError = msg;
+        }
       }
-      const data = await res.json();
-      if (data?.outAmount) {
-        return {
-          ...data,
-          _sourceBase: base,
-        };
-      }
-    } catch (err) {
-      lastError = err?.message || 'Quote request failed';
     }
+  }
+
+  // Final fallback: if cache exists, return it even if slightly aged
+  if (cached?.data) {
+    return cached.data;
   }
 
   throw new Error(lastError || 'No trade route available.');
@@ -64,6 +115,7 @@ export async function getJupiterStockSwapTransaction({
   quoteResponse,
   dynamicComputeUnitLimit = true,
   prioritizationFeeLamports = 'auto',
+  signal,
 }) {
   if (!userPublicKey) {
     throw new Error('User Solana public key is required to build swap transaction.');
@@ -86,24 +138,45 @@ export async function getJupiterStockSwapTransaction({
 
   let lastError = null;
   for (const base of bases) {
-    try {
-      const res = await fetch(`${base}/swap`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(`${base}/swap`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal,
+        });
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData?.error || errData?.message || `HTTP ${res.status}`);
-      }
+        if (res.status === 429) {
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 700 + Math.random() * 300));
+            continue;
+          }
+          throw new Error('Network is busy. Please tap Trade again in a moment.');
+        }
 
-      const data = await res.json();
-      if (data?.swapTransaction) {
-        return data;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          const errMsg = String(errData?.error || errData?.message || `HTTP ${res.status}`);
+          if (errMsg.toLowerCase().includes('too many requests') || errMsg.includes('429')) {
+            throw new Error('Network is busy. Please tap Trade again in a moment.');
+          }
+          throw new Error(errMsg);
+        }
+
+        const data = await res.json();
+        if (data?.swapTransaction) {
+          return data;
+        }
+      } catch (err) {
+        if (err?.name === 'AbortError') throw err;
+        const msg = String(err?.message || 'Swap transaction construction failed');
+        if (msg.toLowerCase().includes('too many requests') || msg.includes('429')) {
+          lastError = 'Network is busy. Please tap Trade again in a moment.';
+        } else {
+          lastError = msg;
+        }
       }
-    } catch (err) {
-      lastError = err?.message || 'Swap transaction construction failed';
     }
   }
 
@@ -111,30 +184,54 @@ export async function getJupiterStockSwapTransaction({
 }
 
 /**
- * Fetch live stock price in USDC using Jupiter market liquidity
+ * Fetch live stock price in USDC using Jupiter market liquidity with deduplication and caching
  */
-export async function fetchStockPriceUsd(stockMint, stockDecimals = 8) {
-  try {
-    // 100 USDC in smallest units (6 decimals)
-    const testAmountRaw = 100_000_000;
-    const quote = await getJupiterStockQuote({
-      inputMint: SOLANA_USDC_MINT,
-      outputMint: stockMint,
-      amountRaw: testAmountRaw,
-      slippageBps: 50,
-    });
+export async function fetchStockPriceUsd(stockMint, stockDecimals = 8, defaultPrice = null) {
+  if (!stockMint) return defaultPrice;
 
-    if (quote?.outAmount) {
-      const shares = Number(quote.outAmount) / 10 ** stockDecimals;
-      if (shares > 0) {
-        const pricePerShare = 100 / shares;
-        return Number(pricePerShare.toFixed(2));
-      }
-    }
-  } catch (err) {
-    console.warn('[Jupiter] Failed to fetch stock price for', stockMint, err?.message || err);
+  // 1. Check in-memory price cache
+  const cached = priceCache.get(stockMint);
+  if (cached && Date.now() - cached.timestamp < PRICE_CACHE_TTL) {
+    return cached.price;
   }
-  return null;
+
+  // 2. If already in flight, reuse existing promise
+  if (inFlightPriceRequests.has(stockMint)) {
+    return inFlightPriceRequests.get(stockMint);
+  }
+
+  // 3. Fallback to reference price from catalog
+  const reference = defaultPrice || HALAL_STOCKS.find((s) => s.mint === stockMint)?.referencePriceUsd || null;
+
+  const fetchPromise = (async () => {
+    try {
+      // Use 100 USDC quote for price discovery
+      const testAmountRaw = 100_000_000;
+      const quote = await getJupiterStockQuote({
+        inputMint: SOLANA_USDC_MINT,
+        outputMint: stockMint,
+        amountRaw: testAmountRaw,
+        slippageBps: 50,
+      });
+
+      if (quote?.outAmount) {
+        const shares = Number(quote.outAmount) / 10 ** stockDecimals;
+        if (shares > 0) {
+          const pricePerShare = Number((100 / shares).toFixed(2));
+          priceCache.set(stockMint, { price: pricePerShare, timestamp: Date.now() });
+          return pricePerShare;
+        }
+      }
+    } catch {
+      // Graceful fallback to reference price on rate limits or network issues
+    } finally {
+      inFlightPriceRequests.delete(stockMint);
+    }
+    return reference;
+  })();
+
+  inFlightPriceRequests.set(stockMint, fetchPromise);
+  return fetchPromise;
 }
 
 /**
@@ -161,119 +258,77 @@ export async function fetchTokenBalance(solanaAddress, mintAddress) {
       });
 
       if (!res.ok) continue;
-
       const data = await res.json();
-      const accounts = data?.result?.value;
-      if (Array.isArray(accounts) && accounts.length > 0) {
-        let total = 0;
-        for (const acc of accounts) {
-          const info = acc?.account?.data?.parsed?.info?.tokenAmount;
-          if (info?.uiAmount) {
-            total += Number(info.uiAmount);
-          }
-        }
-        return total;
-      }
-      return 0;
-    } catch {
-      // try next RPC
-    }
+      const accounts = data?.result?.value || [];
+      if (!accounts.length) return 0;
+
+      const total = accounts.reduce((acc, curr) => {
+        const amount = curr?.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
+        return acc + (Number(amount) || 0);
+      }, 0);
+
+      return total;
+    } catch {}
   }
+
   return 0;
 }
 
 /**
- * Decode base64 transaction string into Uint8Array
- */
-export function decodeBase64Tx(b64) {
-  if (typeof Buffer !== 'undefined') {
-    return Uint8Array.from(Buffer.from(b64, 'base64'));
-  }
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/**
- * Executes Jupiter swap transaction using connected Privy Solana embedded wallet
+ * Executes swap transaction using connected Privy Solana embedded wallet
  */
 export async function executeSolanaSwapTransaction({
   solWallet,
   swapTransactionBase64,
 }) {
-  if (!solWallet) {
-    throw new Error('No Solana wallet connected to sign the transaction.');
-  }
   if (!swapTransactionBase64) {
     throw new Error('No swap transaction provided.');
   }
 
-  const txBytes = decodeBase64Tx(swapTransactionBase64);
+  const txBuffer = Uint8Array.from(atob(swapTransactionBase64), (c) => c.charCodeAt(0));
 
-  // Strategy 1: Standard wallet signAndSendTransaction
-  if (typeof solWallet.signAndSendTransaction === 'function') {
+  if (solWallet && typeof solWallet.signAndSendTransaction === 'function') {
     try {
-      const res = await solWallet.signAndSendTransaction({
-        transaction: txBytes,
-        chain: 'solana:mainnet',
+      const sendRes = await solWallet.signAndSendTransaction({
+        transaction: txBuffer,
       });
-      const sig = res?.signature || res?.hash || res;
-      if (typeof sig === 'string' && sig.length >= 32) return sig;
+      const sig = sendRes?.signature || sendRes?.hash || sendRes;
+      if (sig && typeof sig === 'string') return sig;
     } catch (err) {
-      if (err?.message?.includes('User rejected') || err?.name === 'UserRejectedRequestError') {
-        throw err;
-      }
-      console.warn('[Jupiter] signAndSendTransaction failed, trying signTransaction:', err);
-    }
-  }
+      if (solWallet && typeof solWallet.signTransaction === 'function') {
+        const signed = await solWallet.signTransaction({ transaction: txBuffer });
+        const signedBuffer = signed?.signedTransaction || signed;
+        const signedBase64 = btoa(String.fromCharCode.apply(null, signedBuffer));
 
-  // Strategy 2: Standard wallet signTransaction + direct RPC broadcast
-  if (typeof solWallet.signTransaction === 'function') {
-    const signed = await solWallet.signTransaction({
-      transaction: txBytes,
-      chain: 'solana:mainnet',
-    });
-
-    const signedBytes = signed?.signedTransaction || signed;
-    const rawBytes = signedBytes instanceof Uint8Array ? signedBytes : new Uint8Array(signedBytes);
-    const rawBase64 = typeof Buffer !== 'undefined'
-      ? Buffer.from(rawBytes).toString('base64')
-      : btoa(String.fromCharCode(...rawBytes));
-
-    for (const rpc of SOLANA_RPCS) {
-      try {
-        const res = await fetch(rpc, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 'send-tx',
-            method: 'sendTransaction',
-            params: [rawBase64, { encoding: 'base64', skipPreflight: true, maxRetries: 5 }],
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.result) return data.result;
+        for (const rpc of SOLANA_RPCS) {
+          try {
+            const broadcastRes = await fetch(rpc, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 'broadcast-swap',
+                method: 'sendTransaction',
+                params: [
+                  signedBase64,
+                  {
+                    encoding: 'base64',
+                    skipPreflight: false,
+                    preflightCommitment: 'confirmed',
+                  },
+                ],
+              }),
+            });
+            if (broadcastRes.ok) {
+              const bData = await broadcastRes.json();
+              if (bData?.result) return bData.result;
+            }
+          } catch {}
         }
-      } catch (rpcErr) {
-        console.warn('[Jupiter] RPC broadcast error:', rpcErr);
       }
+      throw err;
     }
   }
 
-  // Strategy 3: Standard sendTransaction
-  if (typeof solWallet.sendTransaction === 'function') {
-    const res = await solWallet.sendTransaction(txBytes, {
-      chain: 'solana:mainnet',
-    });
-    const sig = res?.signature || res?.hash || res;
-    if (typeof sig === 'string' && sig.length >= 32) return sig;
-  }
-
-  throw new Error('Unable to execute transaction with the connected wallet.');
+  throw new Error('Connected Solana wallet does not support transaction signing.');
 }
