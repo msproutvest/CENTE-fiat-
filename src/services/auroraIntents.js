@@ -38,7 +38,7 @@ async function fetchAuroraWithRetry(url, options = {}, maxAttempts = 3) {
 export async function getAuroraDepositAddress({
   depositChain = 'tron',
   recipient,
-  destinationAsset = 'nep141:sol.omft.near',
+  destinationAsset = 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
   apiKey = config.aurora?.apiKey,
   apiUrl = config.aurora?.apiUrl || 'https://intents-api.aurora.dev',
 }) {
@@ -52,7 +52,7 @@ export async function getAuroraDepositAddress({
     );
   }
 
-  const cacheKey = `cente_aurora_pda_${depositChain}_${recipient}`;
+  const cacheKey = `halalvest_aurora_pda_v2_${depositChain}_${destinationAsset}_${recipient}`;
 
   // Check persistent local cache first
   try {
@@ -118,33 +118,41 @@ export async function getAuroraDepositAddress({
  */
 export async function getAuroraDepositStatus({
   depositAddress,
-  type = 'all',
   apiKey = config.aurora?.apiKey,
   apiUrl = config.aurora?.apiUrl || 'https://intents-api.aurora.dev',
 }) {
   if (!depositAddress || !apiKey) return { success: false, deposits: [] };
 
-  const url = `${apiUrl}/api/persistent-deposit-status/${encodeURIComponent(apiKey)}?address=${encodeURIComponent(
-    depositAddress
-  )}&type=${encodeURIComponent(type)}`;
+  // Aurora only accepts one of: received | success | failed (there is no "all"),
+  // so query each state and merge the results.
+  const types = ['received', 'success', 'failed'];
 
   try {
-    const res = await fetchAuroraWithRetry(url, {}, 2);
-    if (!res.ok) {
-      return { success: false, deposits: [] };
-    }
-    const data = await res.json().catch(() => ({}));
-    const rawDeposits = Array.isArray(data?.deposits) ? data.deposits : [];
+    const results = await Promise.all(
+      types.map(async (type) => {
+        const url = `${apiUrl}/api/persistent-deposit-status/${encodeURIComponent(apiKey)}?address=${encodeURIComponent(
+          depositAddress
+        )}&type=${type}`;
+        const res = await fetchAuroraWithRetry(url, {}, 2);
+        if (!res.ok) return { ok: false, type, items: [] };
+        const data = await res.json().catch(() => ({}));
+        return { ok: true, type, items: Array.isArray(data?.deposits) ? data.deposits : [] };
+      })
+    );
+
+    if (results.every((r) => !r.ok)) return { success: false, deposits: [] };
 
     // Normalize deposit objects
-    const deposits = rawDeposits.map((item) => ({
-      txHash: item?.txHash || item?.transactionHash || item?.hash || null,
-      amount: item?.amount || item?.depositAmount || null,
-      asset: item?.asset || item?.depositAsset || 'USDT',
-      status: String(item?.status || item?.swapStatus || type).toLowerCase(),
-      timestamp: item?.timestamp || item?.createdAt || Date.now(),
-      destinationTxHash: item?.destinationTxHash || item?.targetTxHash || null,
-    }));
+    const deposits = results.flatMap(({ type, items }) =>
+      items.map((item) => ({
+        txHash: item?.txHash || item?.transactionHash || item?.hash || null,
+        amount: item?.amount || item?.depositAmount || null,
+        asset: item?.asset || item?.depositAsset || 'USDT',
+        status: String(item?.status || item?.swapStatus || type).toLowerCase(),
+        timestamp: item?.timestamp || item?.createdAt || Date.now(),
+        destinationTxHash: item?.destinationTxHash || item?.targetTxHash || null,
+      }))
+    );
 
     return {
       success: true,

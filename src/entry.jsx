@@ -20,6 +20,7 @@ function parseDataset(el) {
     network: ds.network,
     moonpaySandbox: ds.moonpaySandbox !== undefined ? ds.moonpaySandbox === 'true' : undefined,
     auroraApiKey: ds.auroraApiKey,
+    solanaRpcUrl: ds.solanaRpcUrl,
     brand: ds.brand || (el.hasAttribute('data-halalvest-widget') || el.hasAttribute('data-halalvest-payment') ? 'halalvest' : 'halalvest'),
     initialTab: ds.initialTab || ds.defaultTab || undefined,
     minAmount: ds.minAmount ? Number(ds.minAmount) : undefined,

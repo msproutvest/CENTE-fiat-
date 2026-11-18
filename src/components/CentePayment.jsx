@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { CenteFiatOnramp } from './CenteFiatOnramp';
 import { config } from '../config';
 import { safeRedirectUrl, DEFAULT_REDIRECT } from '../lib/safe-redirect';
+import { setSolanaRpcUrl } from '../services/jupiterSwap';
 
 function ConfigError({ message }) {
   return (
@@ -36,6 +37,7 @@ export function CentePayment({
   network = config.defaultNetwork || 'Solana',
   moonpaySandbox = config.moonpaySandbox ?? false,
   auroraApiKey = config.aurora?.apiKey,
+  solanaRpcUrl,
   brand = 'halalvest',
   initialTab,
   minAmount,
@@ -46,6 +48,7 @@ export function CentePayment({
 }) {
   // Validate the redirect once, at the plugin boundary.
   const safeRedirect = safeRedirectUrl(redirectUrl, allowedRedirectHosts);
+  if (solanaRpcUrl) setSolanaRpcUrl(solanaRpcUrl);
 
   const privyConfig = useMemo(
     () => ({

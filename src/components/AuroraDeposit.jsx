@@ -83,7 +83,7 @@ export function AuroraDeposit({ solanaAddress, apiKey = config.aurora?.apiKey, o
         const res = await getAuroraDepositAddress({
           depositChain: selectedNetwork.depositChain,
           recipient: solanaAddress,
-          destinationAsset: selectedNetwork.destinationAsset || 'nep141:sol.omft.near',
+          destinationAsset: selectedNetwork.destinationAsset || 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
           apiKey,
         });
 

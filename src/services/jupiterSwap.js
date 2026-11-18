@@ -1,15 +1,45 @@
 import { SOLANA_USDC_MINT, HALAL_STOCKS } from '../data/halalStocks';
+import { config } from '../config';
 
 const JUPITER_API_BASES = [
   'https://lite-api.jup.ag/swap/v1',
   'https://api.jup.ag/swap/v1',
 ];
 
-const SOLANA_RPCS = [
+// Public Solana RPCs generally block browser (CORS/403) traffic. Set a dedicated RPC
+// (Helius / QuickNode / Alchemy ...) via VITE_SOLANA_RPC_URL or data-solana-rpc-url.
+const PUBLIC_SOLANA_RPCS = [
   'https://api.mainnet-beta.solana.com',
   'https://solana-rpc.publicnode.com',
   'https://rpc.ankr.com/solana',
 ];
+
+let configuredRpc = config.solanaRpcUrl || '';
+
+export function setSolanaRpcUrl(url) {
+  if (typeof url === 'string' && url.trim()) configuredRpc = url.trim();
+}
+
+// RPCs that recently failed (403/429/network) are skipped for a while instead of retried on every call
+const RPC_COOLDOWN_MS = 5 * 60_000;
+const rpcCooldown = new Map();
+
+function getRpcList() {
+  const now = Date.now();
+  const all = [configuredRpc, ...PUBLIC_SOLANA_RPCS].filter(Boolean);
+  const ready = all.filter((r) => (rpcCooldown.get(r) || 0) <= now);
+  // If everything is cooling down, try the configured one (or first) once more
+  return ready.length ? ready : all.slice(0, 1);
+}
+
+function markRpcFailed(rpc) {
+  rpcCooldown.set(rpc, Date.now() + RPC_COOLDOWN_MS);
+}
+
+// Balance cache + in-flight dedupe (owner:mint -> { value, timestamp })
+const balanceCache = new Map();
+const inFlightBalance = new Map();
+const BALANCE_CACHE_TTL = 15_000;
 
 // In-memory quote cache (key: input:output:amount:slippage -> { data, timestamp })
 const quoteCache = new Map();
@@ -240,38 +270,56 @@ export async function fetchStockPriceUsd(stockMint, stockDecimals = 8, defaultPr
 export async function fetchTokenBalance(solanaAddress, mintAddress) {
   if (!solanaAddress || !mintAddress) return 0;
 
-  for (const rpc of SOLANA_RPCS) {
-    try {
-      const res = await fetch(rpc, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 'balance-check',
-          method: 'getTokenAccountsByOwner',
-          params: [
-            solanaAddress,
-            { mint: mintAddress },
-            { encoding: 'jsonParsed' },
-          ],
-        }),
-      });
+  const key = `${solanaAddress}:${mintAddress}`;
+  const cached = balanceCache.get(key);
+  if (cached && Date.now() - cached.timestamp < BALANCE_CACHE_TTL) return cached.value;
+  if (inFlightBalance.has(key)) return inFlightBalance.get(key);
 
-      if (!res.ok) continue;
-      const data = await res.json();
-      const accounts = data?.result?.value || [];
-      if (!accounts.length) return 0;
+  const promise = (async () => {
+    for (const rpc of getRpcList()) {
+      try {
+        const res = await fetch(rpc, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'balance-check',
+            method: 'getTokenAccountsByOwner',
+            params: [
+              solanaAddress,
+              { mint: mintAddress },
+              { encoding: 'jsonParsed' },
+            ],
+          }),
+        });
 
-      const total = accounts.reduce((acc, curr) => {
-        const amount = curr?.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
-        return acc + (Number(amount) || 0);
-      }, 0);
+        if (!res.ok) {
+          markRpcFailed(rpc);
+          continue;
+        }
+        const data = await res.json();
+        if (data?.error) {
+          markRpcFailed(rpc);
+          continue;
+        }
+        const accounts = data?.result?.value || [];
+        const total = accounts.reduce((acc, curr) => {
+          const amount = curr?.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
+          return acc + (Number(amount) || 0);
+        }, 0);
 
-      return total;
-    } catch {}
-  }
+        balanceCache.set(key, { value: total, timestamp: Date.now() });
+        return total;
+      } catch {
+        markRpcFailed(rpc);
+      }
+    }
+    // All RPCs unavailable: keep last known balance instead of flashing 0
+    return cached?.value ?? 0;
+  })().finally(() => inFlightBalance.delete(key));
 
-  return 0;
+  inFlightBalance.set(key, promise);
+  return promise;
 }
 
 /**
@@ -300,7 +348,7 @@ export async function executeSolanaSwapTransaction({
         const signedBuffer = signed?.signedTransaction || signed;
         const signedBase64 = btoa(String.fromCharCode.apply(null, signedBuffer));
 
-        for (const rpc of SOLANA_RPCS) {
+        for (const rpc of getRpcList()) {
           try {
             const broadcastRes = await fetch(rpc, {
               method: 'POST',
@@ -322,8 +370,12 @@ export async function executeSolanaSwapTransaction({
             if (broadcastRes.ok) {
               const bData = await broadcastRes.json();
               if (bData?.result) return bData.result;
+            } else {
+              markRpcFailed(rpc);
             }
-          } catch {}
+          } catch {
+            markRpcFailed(rpc);
+          }
         }
       }
       throw err;
