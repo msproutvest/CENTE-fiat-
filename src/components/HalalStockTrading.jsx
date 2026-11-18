@@ -401,25 +401,13 @@ export function HalalStockTrading({
   // ---------------------------------------------------------------------
   if (view === 'list') {
     return (
-      <div className="space-y-3.5 text-white">
-        {/* Shariah Compliance Header Badge */}
-        <div className="p-3 rounded-2xl flex items-center justify-between bg-emerald-950/30 border border-emerald-500/25">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-              <ShieldCheck size={18} />
-            </div>
-            <div>
-              <div className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
-                <span>Shariah-Screened Equities</span>
-                <span className="text-[9px] px-1.5 py-0.2 rounded-full font-semibold bg-emerald-500/20 text-emerald-300">
-                  21 Stocks
-                </span>
-              </div>
-              <div className="text-[10px] text-slate-400">
-                AAOIFI & S&P Shariah Standards • Solana Mainnet
-              </div>
-            </div>
-          </div>
+      <div className="space-y-3 text-white">
+        {/* Shariah compliance note (single line, no boxed banner) */}
+        <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <ShieldCheck size={13} className="text-emerald-400 shrink-0" />
+          <span>
+            {filteredStocks.length} Shariah-screened stocks • AAOIFI &amp; S&amp;P standards
+          </span>
         </div>
 
         {/* Search Bar */}
@@ -453,9 +441,9 @@ export function HalalStockTrading({
         </div>
 
         {/* All Stocks List with Trade Button Side-by-Side */}
-        <div className="space-y-2 max-h-[360px] overflow-y-auto pr-0.5">
+        <div className="border-t border-emerald-500/15">
           {filteredStocks.length === 0 ? (
-            <div className="py-8 text-center text-xs text-slate-400 bg-[#09120e] rounded-2xl border border-emerald-500/20">
+            <div className="py-8 text-center text-xs text-slate-400">
               No Halal stocks match your search.
             </div>
           ) : (
@@ -464,7 +452,7 @@ export function HalalStockTrading({
               return (
                 <div
                   key={stock.symbol}
-                  className="p-3 rounded-2xl bg-[#09120e] border border-emerald-500/20 hover:border-emerald-500/40 transition flex items-center justify-between gap-3 group"
+                  className="py-3 border-b border-emerald-500/15 flex items-center justify-between gap-3 group"
                 >
                   {/* Stock Info */}
                   <div
