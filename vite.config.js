@@ -49,8 +49,7 @@ function generateDistHtmlAndCssPlugin() {
     <script src="./cente-payment.js"></script>
     <script>
       window.addEventListener('load', function() {
-        var loader = document.getElementById('widget-loader');
-        if (loader && window.HalalvestWidget && window.HalalvestWidget.mount) {
+        if (!document.querySelector('.co-root') && window.HalalvestWidget && window.HalalvestWidget.mount) {
           window.HalalvestWidget.mount('#halalvest-widget');
         }
       });
