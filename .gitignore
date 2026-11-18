@@ -13,6 +13,7 @@ dist
 dist-ssr
 dist-backup
 assets
+*.zip
 
 # Environment
 .env
